@@ -42,9 +42,11 @@ czujników ruchu — dlatego jest ekran startowy z przyciskiem **Uruchom**
 - **Zrób zdjęcie** – zapis PNG + udostępnianie.
 
 ## Jak to działa (technicznie)
-- **Canvas 2D**: szkiełka (cząstki) rysowane są raz na „scenie" offscreen, a obraz
-  kalejdoskopu powstaje przez wycięcie jednego klina (`clip`) i powielenie go
-  z lustrzanym odbiciem co drugi segment → pełna symetria radialna.
+- **Prawdziwa symetria kalejdoskopu**: wszystkie szkiełka żyją w **jednej komorze**
+  (jednym klinie). Ściany klina to lustra — szkiełka fizycznie się od nich odbijają.
+  Pozostałe segmenty to lustrzane kopie tej samej komory (`clip` + odbicie co drugi
+  segment), więc na granicach szkiełka stykają się ze swoimi odbiciami — dokładnie
+  jak w prawdziwym kalejdoskopie.
 - **Fizyka**: własna pętla `requestAnimationFrame` z krokiem czasowym; grawitacja
   jest transformowana do obróconego układu wzoru, więc kręcenie obrazem realnie
   przesuwa szkiełka (odczuwalna bezwładność).

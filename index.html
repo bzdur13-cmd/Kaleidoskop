@@ -128,22 +128,30 @@
   ];
 
   // ---------- Szkiełka (cząstki fizyczne) ----------
-  const N = 34;
+  // WAŻNE: wszystkie szkiełka żyją tylko w JEDNYM klinie (komorze kalejdoskopu).
+  // Ściany klina to lustra — szkiełka się od nich odbijają, a reszta symetrii
+  // to lustrzane kopie tej samej komory (tak działa prawdziwy kalejdoskop).
+  const N = 12;                 // jeden zestaw szkiełek w komorze
   const particles = [];
-  let R = 300; // promień sceny w pikselach urządzenia (ustawiany w resize)
+  let R = 300;                  // promień w pikselach urządzenia
+  const R_IN = 0.04;            // mały otwór w centrum (ułamek R)
+
+  const halfWedge = () => Math.PI / state.segments; // połowa kąta klina
 
   function makeParticles() {
     particles.length = 0;
     const cols = PALETTES[state.palette];
+    const hw = halfWedge();
     for (let i = 0; i < N; i++) {
-      const ang = Math.random() * Math.PI * 2;
-      const rad = Math.sqrt(Math.random()) * R * 0.9;
+      // rozłóż szkiełka wewnątrz klina wycelowanego w oś +X, w [-hw, hw]
+      const ang = (Math.random() * 2 - 1) * hw * 0.85;
+      const rad = (R_IN + Math.sqrt(Math.random()) * (0.85 - R_IN)) * R;
       particles.push({
         x: Math.cos(ang) * rad,
         y: Math.sin(ang) * rad,
         vx: (Math.random() - .5) * 40,
         vy: (Math.random() - .5) * 40,
-        r: R * (0.05 + Math.random() * 0.10),
+        r: R * (0.05 + Math.random() * 0.09),
         color: cols[i % cols.length],
         shape: Math.random() < 0.5 ? 'circle' : 'poly',
         sides: 3 + (Math.floor(Math.random() * 4)),
@@ -151,6 +159,14 @@
         vrot: (Math.random() - .5) * 2,
       });
     }
+  }
+
+  // Odbicie wektora (pozycji lub prędkości) względem prostej przez środek
+  // o kierunku (cos phi, sin phi) — czyli lustro pod kątem phi.
+  function reflect(x, y, phi) {
+    const dx = Math.cos(phi), dy = Math.sin(phi);
+    const dot = x * dx + y * dy;
+    return [2 * dot * dx - x, 2 * dot * dy - y];
   }
 
   // ---------- Rozmiar / DPR ----------
@@ -192,12 +208,31 @@
       p.x += p.vx * dt;  p.y += p.vy * dt;
       p.rot += p.vrot * dt;
 
-      // odbicie od okrągłej ściany (promień R - r)
-      const dist = Math.hypot(p.x, p.y);
-      const lim = R - p.r;
-      if (dist > lim) {
-        const nx = p.x / dist, ny = p.y / dist;
-        p.x = nx * lim; p.y = ny * lim;
+      // --- Lustra klina: dwie ściany promieniowe pod kątem +/- hw ---
+      // Szkiełko, które by je przekroczyło, odbija się (i tak samo jego
+      // prędkość) — dokładnie jak realne szkiełko odbite w lustrze.
+      const hw = halfWedge();
+      let a = Math.atan2(p.y, p.x);
+      if (a > hw) {
+        [p.x, p.y]   = reflect(p.x, p.y, hw);
+        [p.vx, p.vy] = reflect(p.vx, p.vy, hw);
+      } else if (a < -hw) {
+        [p.x, p.y]   = reflect(p.x, p.y, -hw);
+        [p.vx, p.vy] = reflect(p.vx, p.vy, -hw);
+      }
+
+      // --- Ściana zewnętrzna (obudowa) i mały otwór w centrum ---
+      const dist = Math.hypot(p.x, p.y) || 1e-6;
+      const nx = p.x / dist, ny = p.y / dist;
+      const outer = R - p.r;
+      const inner = R_IN * R + p.r;
+      if (dist > outer) {
+        p.x = nx * outer; p.y = ny * outer;
+        const vn = p.vx * nx + p.vy * ny;
+        p.vx -= (1 + REST) * vn * nx;
+        p.vy -= (1 + REST) * vn * ny;
+      } else if (dist < inner) {
+        p.x = nx * inner; p.y = ny * inner;
         const vn = p.vx * nx + p.vy * ny;
         p.vx -= (1 + REST) * vn * nx;
         p.vy -= (1 + REST) * vn * ny;
@@ -374,6 +409,17 @@
     const idx = (opts.indexOf(state.segments) + 1) % opts.length;
     state.segments = opts[idx];
     hudSeg.textContent = 'Symetria: ' + state.segments;
+    // zwiń szkiełka do nowego (mniejszego/większego) klina
+    const hw = halfWedge();
+    for (const p of particles) {
+      let a = Math.atan2(p.y, p.x);
+      if (a > hw || a < -hw) {
+        const rad = Math.hypot(p.x, p.y);
+        const na = Math.max(-hw, Math.min(hw, a)) * 0.9;
+        p.x = Math.cos(na) * rad; p.y = Math.sin(na) * rad;
+        p.vx *= 0.3; p.vy *= 0.3;
+      }
+    }
   });
   document.getElementById('btn-scatter').addEventListener('click', () => scatter(30));
   document.getElementById('btn-palette').addEventListener('click', () => {
