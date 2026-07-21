@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0a0a12" />
+<title>Kalejdoskop</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #0a0a12; color: #eee;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    touch-action: none; overscroll-behavior: none;
+  }
+  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+  canvas#view {
+    width: min(100vw, 100vh); height: min(100vw, 100vh);
+    max-width: 100%; max-height: 100%;
+    border-radius: 50%;
+    box-shadow: 0 0 60px rgba(120,120,255,.25), inset 0 0 40px rgba(0,0,0,.6);
+    touch-action: none; display: block;
+  }
+  /* Górny pasek stanu */
+  #hud {
+    position: fixed; top: env(safe-area-inset-top, 8px); left: 0; right: 0;
+    display: flex; justify-content: center; gap: 8px; padding: 8px;
+    font-size: 12px; opacity: .75; pointer-events: none;
+  }
+  #hud span { background: rgba(255,255,255,.08); padding: 4px 10px; border-radius: 999px; }
+  /* Dolny pasek narzędzi */
+  #bar {
+    position: fixed; left: 0; right: 0;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+    display: flex; justify-content: center; gap: 10px; padding: 0 12px; flex-wrap: wrap;
+  }
+  button {
+    appearance: none; border: 0; cursor: pointer;
+    background: rgba(255,255,255,.10); color: #fff;
+    padding: 12px 16px; border-radius: 14px; font-size: 14px; font-weight: 600;
+    backdrop-filter: blur(8px); transition: transform .08s, background .15s;
+  }
+  button:active { transform: scale(.94); background: rgba(255,255,255,.2); }
+  button.primary { background: linear-gradient(135deg,#7c5cff,#ff5ca8); }
+  /* Ekran startowy / prośba o zgodę na sensory */
+  #gate {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: radial-gradient(circle at 50% 40%, #171730, #08080f);
+    text-align: center; padding: 24px; z-index: 20;
+  }
+  #gate .card { max-width: 360px; }
+  #gate h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .5px; }
+  #gate p { opacity: .8; font-size: 14px; line-height: 1.5; }
+  .hidden { display: none !important; }
+  /* Toast po zapisie/udostępnieniu */
+  #toast {
+    position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+    background: rgba(20,20,30,.9); border: 1px solid rgba(255,255,255,.15);
+    padding: 10px 16px; border-radius: 12px; font-size: 13px; opacity: 0;
+    transition: opacity .25s; pointer-events: none; z-index: 30;
+  }
+  #toast.show { opacity: 1; }
+  #flash {
+    position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 25;
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="view"></canvas>
+  </div>
+
+  <div id="hud">
+    <span id="hud-seg">Symetria: 6</span>
+    <span id="hud-sensor">Sensory: —</span>
+  </div>
+
+  <div id="bar">
+    <button id="btn-segments">Symetria</button>
+    <button id="btn-scatter">Wstrząśnij</button>
+    <button id="btn-palette">Kolory</button>
+    <button id="btn-shot" class="primary">Zrób zdjęcie</button>
+  </div>
+
+  <div id="flash"></div>
+  <div id="toast"></div>
+
+  <div id="gate">
+    <div class="card">
+      <h1>✦ Kalejdoskop ✦</h1>
+      <p>Obracaj i&nbsp;potrząsaj telefonem, kręć obraz palcem.
+         Szkiełka reagują na&nbsp;grawitację i&nbsp;ruch.</p>
+      <p style="margin-top:18px; font-size:12px; opacity:.6">
+         Na&nbsp;telefonie przeglądarka poprosi o&nbsp;dostęp do&nbsp;czujników ruchu.</p>
+      <button id="gate-start" class="primary" style="margin-top:18px; padding:14px 28px; font-size:16px;">
+        Uruchom
+      </button>
+    </div>
+  </div>
+
+<script>
+"use strict";
+(() => {
+  const view = document.getElementById('view');
+  const ctx = view.getContext('2d');
+
+  // ---- Offscreen "scena" — tu żyją szkiełka, z niej wycinamy kliny ----
+  const scene = document.createElement('canvas');
+  const sctx = scene.getContext('2d');
+
+  // ---------- Stan / parametry ----------
+  const state = {
+    segments: 6,               // liczba osi symetrii
+    theta: 0,                  // aktualny obrót kalejdoskopu (spin)
+    omega: 0,                  // prędkość kątowa spinu
+    gx: 0, gy: 1,              // wektor grawitacji w układzie ekranu (domyślnie w dół)
+    dpr: Math.min(window.devicePixelRatio || 1, 2),
+    palette: 0,
+    hasMotion: false,
+  };
+
+  const PALETTES = [
+    ['#ff5ca8','#7c5cff','#33d6ff','#5cff9d','#ffd15c','#ff8a5c'],
+    ['#f72585','#b5179e','#7209b7','#3a0ca3','#4361ee','#4cc9f0'],
+    ['#ffd6a5','#fdffb6','#caffbf','#9bf6ff','#a0c4ff','#bdb2ff'],
+    ['#ff9e00','#ff6d00','#ff0054','#390099','#9e0059','#00c2ff'],
+  ];
+
+  // ---------- Szkiełka (cząstki fizyczne) ----------
+  const N = 34;
+  const particles = [];
+  let R = 300; // promień sceny w pikselach urządzenia (ustawiany w resize)
+
+  function makeParticles() {
+    particles.length = 0;
+    const cols = PALETTES[state.palette];
+    for (let i = 0; i < N; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.sqrt(Math.random()) * R * 0.9;
+      particles.push({
+        x: Math.cos(ang) * rad,
+        y: Math.sin(ang) * rad,
+        vx: (Math.random() - .5) * 40,
+        vy: (Math.random() - .5) * 40,
+        r: R * (0.05 + Math.random() * 0.10),
+        color: cols[i % cols.length],
+        shape: Math.random() < 0.5 ? 'circle' : 'poly',
+        sides: 3 + (Math.floor(Math.random() * 4)),
+        rot: Math.random() * Math.PI,
+        vrot: (Math.random() - .5) * 2,
+      });
+    }
+  }
+
+  // ---------- Rozmiar / DPR ----------
+  function resize() {
+    const cssSize = Math.min(window.innerWidth, window.innerHeight);
+    const px = Math.round(cssSize * state.dpr);
+    view.width = px; view.height = px;
+    // Scena kwadratowa, wystarczająco duża by pokryć klin
+    scene.width = px; scene.height = px;
+    R = px / 2;
+    if (particles.length === 0) makeParticles();
+  }
+  window.addEventListener('resize', resize);
+
+  // ---------- Fizyka ----------
+  const GRAV = 900;        // siła grawitacji (px/s^2 skala)
+  const REST = 0.72;       // odbicie od ściany
+  const FRICTION = 0.985;  // opór ruchu szkiełek
+  const SPIN_FRICTION = 0.97;
+
+  function step(dt) {
+    // Grawitacja w układzie ekranu -> obróć do układu wzoru (obróconego o theta)
+    const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
+    const gLocalX = (state.gx * c - state.gy * s) * GRAV;
+    const gLocalY = (state.gx * s + state.gy * c) * GRAV;
+
+    // Wirowanie tworzy siłę odśrodkową i Coriolisa (pieces "rozjeżdżają się" przy kręceniu)
+    const w = state.omega;
+
+    for (const p of particles) {
+      // grawitacja
+      p.vx += gLocalX * dt;
+      p.vy += gLocalY * dt;
+      // odśrodkowa + Coriolis od spinu
+      p.vx += (w * w * p.x + 2 * w * p.vy) * dt;
+      p.vy += (w * w * p.y - 2 * w * p.vx) * dt;
+
+      p.vx *= FRICTION; p.vy *= FRICTION;
+      p.x += p.vx * dt;  p.y += p.vy * dt;
+      p.rot += p.vrot * dt;
+
+      // odbicie od okrągłej ściany (promień R - r)
+      const dist = Math.hypot(p.x, p.y);
+      const lim = R - p.r;
+      if (dist > lim) {
+        const nx = p.x / dist, ny = p.y / dist;
+        p.x = nx * lim; p.y = ny * lim;
+        const vn = p.vx * nx + p.vy * ny;
+        p.vx -= (1 + REST) * vn * nx;
+        p.vy -= (1 + REST) * vn * ny;
+      }
+    }
+
+    // spin z tarciem
+    state.theta += state.omega * dt;
+    state.omega *= SPIN_FRICTION;
+  }
+
+  // ---------- Rysowanie sceny (jeden pełny obraz szkiełek) ----------
+  function drawScene() {
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    sctx.clearRect(0, 0, scene.width, scene.height);
+    sctx.save();
+    sctx.translate(R, R);
+    sctx.globalCompositeOperation = 'lighter'; // świecące, „szklane" nakładanie
+    for (const p of particles) {
+      sctx.save();
+      sctx.translate(p.x, p.y);
+      sctx.rotate(p.rot);
+      const g = sctx.createRadialGradient(0, 0, 0, 0, 0, p.r);
+      g.addColorStop(0, p.color);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      sctx.fillStyle = g;
+      sctx.globalAlpha = 0.9;
+      sctx.beginPath();
+      if (p.shape === 'circle') {
+        sctx.arc(0, 0, p.r, 0, Math.PI * 2);
+      } else {
+        for (let i = 0; i < p.sides; i++) {
+          const a = (i / p.sides) * Math.PI * 2;
+          const x = Math.cos(a) * p.r, y = Math.sin(a) * p.r;
+          i === 0 ? sctx.moveTo(x, y) : sctx.lineTo(x, y);
+        }
+        sctx.closePath();
+      }
+      sctx.fill();
+      sctx.restore();
+    }
+    sctx.restore();
+  }
+
+  // ---------- Kompozycja kalejdoskopu (klin + lustra) ----------
+  function render() {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, view.width, view.height);
+    ctx.save();
+    ctx.translate(R, R);
+    ctx.rotate(state.theta);
+
+    const wedge = Math.PI * 2 / state.segments; // kąt jednego klina
+    for (let i = 0; i < state.segments; i++) {
+      ctx.save();
+      ctx.rotate(i * wedge);
+      if (i % 2 === 1) ctx.scale(1, -1);  // lustrzane odbicie co drugi klin -> pełna symetria
+      // maska klina
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, R, -wedge / 2, wedge / 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(scene, -R, -R);
+      ctx.restore();
+    }
+    ctx.restore();
+
+    // delikatna winieta wewnątrz koła
+    const vg = ctx.createRadialGradient(R, R, R * 0.6, R, R, R);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vg;
+    ctx.beginPath(); ctx.arc(R, R, R, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // ---------- Pętla ----------
+  let last = performance.now();
+  function loop(now) {
+    let dt = (now - last) / 1000; last = now;
+    if (dt > 0.05) dt = 0.05; // stabilność przy zacięciach
+    step(dt);
+    drawScene();
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- Sensory: grawitacja (obrót) + wstrząs ----------
+  let lastShake = 0;
+  function onMotion(e) {
+    state.hasMotion = true;
+    const g = e.accelerationIncludingGravity;
+    if (g && (g.x != null)) {
+      // Normalizujemy do kierunku "w dół" na ekranie.
+      // Oś X telefonu w prawo, Y w górę -> na ekranie Y rośnie w dół, stąd znaki.
+      let gx = -g.x, gy = g.y;
+      const mag = Math.hypot(gx, gy) || 1;
+      // płynne dążenie do nowego kierunku grawitacji
+      state.gx += ((gx / mag) - state.gx) * 0.15;
+      state.gy += ((gy / mag) - state.gy) * 0.15;
+    }
+    // Wstrząs: gwałtowne przyspieszenie bez grawitacji
+    const a = e.acceleration;
+    if (a && a.x != null) {
+      const m = Math.hypot(a.x, a.y, a.z || 0);
+      const t = performance.now();
+      if (m > 16 && t - lastShake > 300) {
+        lastShake = t;
+        scatter(m);
+      }
+    }
+  }
+
+  function scatter(force = 20) {
+    const k = Math.min(force, 40) * 12;
+    for (const p of particles) {
+      p.vx += (Math.random() - .5) * k;
+      p.vy += (Math.random() - .5) * k;
+      p.vrot += (Math.random() - .5) * 6;
+    }
+    state.omega += (Math.random() - .5) * 3;
+    if (navigator.vibrate) navigator.vibrate(30);
+  }
+
+  // ---------- Dotyk: kręcenie palcem (moment obrotowy + bezwładność) ----------
+  let dragging = false, lastAngle = 0, lastT = 0;
+  function pointerAngle(clientX, clientY) {
+    const rect = view.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    return Math.atan2(clientY - cy, clientX - cx);
+  }
+  function onDown(x, y) {
+    dragging = true;
+    lastAngle = pointerAngle(x, y);
+    lastT = performance.now();
+    state.omega *= 0.3; // złap obraz
+  }
+  function onMove(x, y) {
+    if (!dragging) return;
+    const a = pointerAngle(x, y);
+    let d = a - lastAngle;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    const now = performance.now();
+    const dt = Math.max((now - lastT) / 1000, 0.001);
+    state.theta += d;
+    state.omega = d / dt; // prędkość -> bezwładność po puszczeniu
+    lastAngle = a; lastT = now;
+  }
+  function onUp() { dragging = false; }
+
+  view.addEventListener('touchstart', e => { const t = e.touches[0]; onDown(t.clientX, t.clientY); }, {passive:true});
+  view.addEventListener('touchmove',  e => { const t = e.touches[0]; onMove(t.clientX, t.clientY); }, {passive:true});
+  view.addEventListener('touchend', onUp, {passive:true});
+  view.addEventListener('mousedown', e => onDown(e.clientX, e.clientY));
+  window.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
+  window.addEventListener('mouseup', onUp);
+
+  // Fallback na desktopie: strzałki obracają "grawitację"
+  window.addEventListener('keydown', e => {
+    const step = 0.2;
+    if (e.key === 'ArrowLeft')  { const a = Math.atan2(state.gy, state.gx) - step; state.gx = Math.cos(a); state.gy = Math.sin(a); }
+    if (e.key === 'ArrowRight') { const a = Math.atan2(state.gy, state.gx) + step; state.gx = Math.cos(a); state.gy = Math.sin(a); }
+    if (e.key === ' ') scatter(30);
+  });
+
+  // ---------- Przyciski UI ----------
+  const hudSeg = document.getElementById('hud-seg');
+  const hudSensor = document.getElementById('hud-sensor');
+
+  document.getElementById('btn-segments').addEventListener('click', () => {
+    const opts = [4, 6, 8, 10, 12];
+    const idx = (opts.indexOf(state.segments) + 1) % opts.length;
+    state.segments = opts[idx];
+    hudSeg.textContent = 'Symetria: ' + state.segments;
+  });
+  document.getElementById('btn-scatter').addEventListener('click', () => scatter(30));
+  document.getElementById('btn-palette').addEventListener('click', () => {
+    state.palette = (state.palette + 1) % PALETTES.length;
+    const cols = PALETTES[state.palette];
+    particles.forEach((p, i) => p.color = cols[i % cols.length]);
+  });
+
+  // ---------- Zdjęcie: zapis + udostępnienie ----------
+  const flash = document.getElementById('flash');
+  const toast = document.getElementById('toast');
+  function showToast(msg) {
+    toast.textContent = msg; toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 1800);
+  }
+  function doFlash() {
+    flash.style.transition = 'none'; flash.style.opacity = '0.9';
+    requestAnimationFrame(() => { flash.style.transition = 'opacity .4s'; flash.style.opacity = '0'; });
+    if (navigator.vibrate) navigator.vibrate(15);
+  }
+
+  document.getElementById('btn-shot').addEventListener('click', async () => {
+    doFlash();
+    const blob = await new Promise(res => view.toBlob(res, 'image/png'));
+    if (!blob) { showToast('Nie udało się zapisać'); return; }
+    const fname = `kalejdoskop-${Date.now()}.png`;
+    const file = new File([blob], fname, { type: 'image/png' });
+
+    // 1) Natywne udostępnianie (mail / social / zapis) — telefony
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: 'Mój kalejdoskop' });
+        return;
+      } catch (_) { /* użytkownik anulował -> spróbuj pobrać */ }
+    }
+    // 2) Zapis na dysk — desktop / brak Web Share
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fname; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Zapisano: ' + fname);
+  });
+
+  // ---------- Start / zgoda na sensory (iOS wymaga gestu) ----------
+  const gate = document.getElementById('gate');
+  document.getElementById('gate-start').addEventListener('click', async () => {
+    let granted = false;
+    try {
+      if (typeof DeviceMotionEvent !== 'undefined' &&
+          typeof DeviceMotionEvent.requestPermission === 'function') {
+        const res = await DeviceMotionEvent.requestPermission();
+        granted = (res === 'granted');
+      } else {
+        granted = true; // Android / desktop — bez pytania
+      }
+    } catch (_) { granted = false; }
+
+    if (granted) {
+      window.addEventListener('devicemotion', onMotion);
+      hudSensor.textContent = 'Sensory: aktywne';
+    } else {
+      hudSensor.textContent = 'Sensory: brak (użyj palca)';
+    }
+    // odblokuj vibrate/pierwsza klatka
+    resize();
+    gate.classList.add('hidden');
+  });
+
+  // init
+  resize();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
