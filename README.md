@@ -1,7 +1,9 @@
 # Kalejdoskop 🔮
 
-Aplikacja webowa (PWA-ready) symulująca kalejdoskop. Obraz o symetrii lustrzanej
-i „szkiełka" reagują zgodnie z fizyką na:
+Aplikacja webowa (PWA-ready) symulująca kalejdoskop. Sztywne, geometryczne
+szkiełka (figury, listki, motylki, klejnoty) opadają, **zderzają się między sobą
+i ze ściankami (lustrami)** układając symetryczny wzór na prążkowanym,
+podświetlonym tle. Reagują zgodnie z fizyką na:
 
 - **obracanie telefonu** → kierunek grawitacji (szkiełka opadają „w dół" niezależnie od orientacji ekranu),
 - **potrząsanie** → impuls rozrzucający szkiełka (`DeviceMotion`),
@@ -36,7 +38,9 @@ czujników ruchu — dlatego jest ekran startowy z przyciskiem **Uruchom**
 (zgoda musi wynikać z gestu użytkownika).
 
 ## Sterowanie / UI
-- **Symetria** – liczba osi symetrii (4/6/8/10/12),
+- **Szkiełka** – zestaw kształtów: Geometryczne / Listki / Motylki / Klejnoty
+  (każdy ma inne kształty i inne zachowanie: rozmiar, sprężystość, „trzepotanie"),
+- **Symetria** – liczba osi symetrii (6 lub 8),
 - **Wstrząśnij** – ręczny impuls,
 - **Kolory** – zmiana palety szkiełek,
 - **Zrób zdjęcie** – zapis PNG + udostępnianie.
@@ -47,20 +51,38 @@ czujników ruchu — dlatego jest ekran startowy z przyciskiem **Uruchom**
   Pozostałe segmenty to lustrzane kopie tej samej komory (`clip` + odbicie co drugi
   segment), więc na granicach szkiełka stykają się ze swoimi odbiciami — dokładnie
   jak w prawdziwym kalejdoskopie.
+- **Sztywne szkiełka + kolizje**: szkiełka to nieprzezroczyste figury (nie „świecące
+  plamki”) z konturem i szklanym gradientem światła. Zderzają się **między sobą**
+  (kolizje kul ograniczających z zachowaniem pędu) i układają wzór, jak realne
+  szkiełka w komorze.
 - **Fizyka**: własna pętla `requestAnimationFrame` z krokiem czasowym; grawitacja
   jest transformowana do obróconego układu wzoru, więc kręcenie obrazem realnie
-  przesuwa szkiełka (odczuwalna bezwładność).
+  przesuwa szkiełka (odczuwalna bezwładność, siła odśrodkowa i Coriolisa).
 - **Sensory**: `accelerationIncludingGravity` → kierunek grawitacji;
-  `acceleration` → detekcja wstrząsu.
+  `acceleration` → detekcja wstrząsu. Na komputerze (brak żyroskopu) przechył
+  symulują strzałki ←/→, ↑ = reset „w dół”, spacja = wstrząs.
+- **Światło / sheen**: rozświetlenie podąża za przechyłem (przeciwnie do grawitacji),
+  dając złudzenie wpadającego światła — podstawa pod przyszły czujnik światła aparatu.
 - **Eksport**: `canvas.toBlob()` → `navigator.share({files})` z fallbackiem na
   pobranie pliku (`<a download>`).
 
+### Dlaczego grawitacja „na komputerze idzie do środka”?
+Dwie przyczyny: (1) komputer nie ma żyroskopu, więc kierunek „w dół” jest domyślny
+i stały (na telefonie bierze się realny czujnik); (2) w kalejdoskopie szkiełka
+opadają tylko w jednej komorze, a pozostałe segmenty to jej **lustrzane odbicia** —
+odbita grawitacja tworzy symetryczną gwiazdę, więc nigdy nie wygląda jak proste
+„wszystko w dół”. To jest poprawne zachowanie kalejdoskopu.
+
 ## Pomysły na rozwój
-- **WebGL / PixiJS / Three.js** dla płynniejszej grafiki i efektów szkła (refrakcja, bloom).
-- **Matter.js** dla dokładniejszych kolizji między szkiełkami.
+- **Więcej kalejdoskopów** = kolejne zestawy szkiełek z własną fizyką i reakcją na
+  światło (matowe listki inaczej rozpraszają światło niż fasetowane klejnoty).
+- **Czujnik światła aparatu**: przy przesuwaniu telefonu „w stronę światła” (jasność
+  z podglądu kamery lub `AmbientLightSensor`, gdzie dostępny) obraz jaśnieje, a sheen
+  na szkiełkach i prążkach reaguje jak na realne, wpadające światło.
+- **WebGL / PixiJS / Three.js** dla płynniejszej grafiki i prawdziwego szkła (refrakcja, bloom).
+- **Matter.js** dla dokładniejszych kolizji (obrót brył, kształt zamiast kul).
 - Realny **PWA manifest + service worker** (instalacja „na ekranie głównym", offline).
 - Nagrywanie krótkiego **wideo/GIF** zamiast pojedynczej klatki (`MediaRecorder` + `captureStream`).
-- Kalibracja orientacji względem `DeviceOrientation` (kompas) zamiast samego akcelerometru.
 
 ## Stack docelowy (rekomendacja)
 | Warstwa | Technologia |

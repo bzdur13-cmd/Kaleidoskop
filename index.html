@@ -22,14 +22,12 @@
     box-shadow: 0 0 60px rgba(120,120,255,.25), inset 0 0 40px rgba(0,0,0,.6);
     touch-action: none; display: block;
   }
-  /* Górny pasek stanu */
   #hud {
     position: fixed; top: env(safe-area-inset-top, 8px); left: 0; right: 0;
-    display: flex; justify-content: center; gap: 8px; padding: 8px;
+    display: flex; justify-content: center; gap: 8px; padding: 8px; flex-wrap: wrap;
     font-size: 12px; opacity: .75; pointer-events: none;
   }
   #hud span { background: rgba(255,255,255,.08); padding: 4px 10px; border-radius: 999px; }
-  /* Dolny pasek narzędzi */
   #bar {
     position: fixed; left: 0; right: 0;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
@@ -43,7 +41,6 @@
   }
   button:active { transform: scale(.94); background: rgba(255,255,255,.2); }
   button.primary { background: linear-gradient(135deg,#7c5cff,#ff5ca8); }
-  /* Ekran startowy / prośba o zgodę na sensory */
   #gate {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: radial-gradient(circle at 50% 40%, #171730, #08080f);
@@ -53,7 +50,6 @@
   #gate h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .5px; }
   #gate p { opacity: .8; font-size: 14px; line-height: 1.5; }
   .hidden { display: none !important; }
-  /* Toast po zapisie/udostępnieniu */
   #toast {
     position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
     background: rgba(20,20,30,.9); border: 1px solid rgba(255,255,255,.15);
@@ -73,10 +69,12 @@
 
   <div id="hud">
     <span id="hud-seg">Symetria: 6</span>
+    <span id="hud-set">Szkiełka: Geometryczne</span>
     <span id="hud-sensor">Sensory: —</span>
   </div>
 
   <div id="bar">
+    <button id="btn-set">Szkiełka</button>
     <button id="btn-segments">Symetria</button>
     <button id="btn-scatter">Wstrząśnij</button>
     <button id="btn-palette">Kolory</button>
@@ -90,7 +88,7 @@
     <div class="card">
       <h1>✦ Kalejdoskop ✦</h1>
       <p>Obracaj i&nbsp;potrząsaj telefonem, kręć obraz palcem.
-         Szkiełka reagują na&nbsp;grawitację i&nbsp;ruch.</p>
+         Szkiełka opadają, zderzają się i&nbsp;układają wzór.</p>
       <p style="margin-top:18px; font-size:12px; opacity:.6">
          Na&nbsp;telefonie przeglądarka poprosi o&nbsp;dostęp do&nbsp;czujników ruchu.</p>
       <button id="gate-start" class="primary" style="margin-top:18px; padding:14px 28px; font-size:16px;">
@@ -104,77 +102,88 @@
 (() => {
   const view = document.getElementById('view');
   const ctx = view.getContext('2d');
-
-  // ---- Offscreen "scena" — tu żyją szkiełka, z niej wycinamy kliny ----
   const scene = document.createElement('canvas');
   const sctx = scene.getContext('2d');
 
-  // ---------- Stan / parametry ----------
+  // ---------- Stan ----------
   const state = {
-    segments: 6,               // liczba osi symetrii
-    theta: 0,                  // aktualny obrót kalejdoskopu (spin)
-    omega: 0,                  // prędkość kątowa spinu
-    gx: 0, gy: 1,              // wektor grawitacji w układzie ekranu (domyślnie w dół)
+    segments: 6,            // liczba osi symetrii (6 lub 8)
+    theta: 0, omega: 0,     // obrót kalejdoskopu i prędkość kątowa (spin)
+    gx: 0, gy: 1,           // kierunek grawitacji w układzie ekranu (domyślnie w dół)
+    lx: 0, ly: -1,          // kierunek światła (przeciwny do grawitacji) -> sheen
     dpr: Math.min(window.devicePixelRatio || 1, 2),
     palette: 0,
+    pieceSet: 0,
     hasMotion: false,
   };
 
   const PALETTES = [
-    ['#ff5ca8','#7c5cff','#33d6ff','#5cff9d','#ffd15c','#ff8a5c'],
-    ['#f72585','#b5179e','#7209b7','#3a0ca3','#4361ee','#4cc9f0'],
-    ['#ffd6a5','#fdffb6','#caffbf','#9bf6ff','#a0c4ff','#bdb2ff'],
-    ['#ff9e00','#ff6d00','#ff0054','#390099','#9e0059','#00c2ff'],
+    ['#e84393','#6c5ce7','#00b4d8','#2ecc71','#f1c40f','#e67e22'],
+    ['#f72585','#b5179e','#7209b7','#4361ee','#4cc9f0','#06d6a0'],
+    ['#d90429','#ef233c','#8d99ae','#2b2d42','#fca311','#e5e5e5'],
+    ['#ff9e00','#ff6d00','#c9184a','#7b2cbf','#3a0ca3','#00b4d8'],
   ];
 
-  // ---------- Szkiełka (cząstki fizyczne) ----------
-  // WAŻNE: wszystkie szkiełka żyją tylko w JEDNYM klinie (komorze kalejdoskopu).
-  // Ściany klina to lustra — szkiełka się od nich odbijają, a reszta symetrii
-  // to lustrzane kopie tej samej komory (tak działa prawdziwy kalejdoskop).
-  const N = 12;                 // jeden zestaw szkiełek w komorze
-  const particles = [];
-  let R = 300;                  // promień w pikselach urządzenia
-  const R_IN = 0.04;            // mały otwór w centrum (ułamek R)
+  // Zestawy szkiełek — różne kształty i różne "zachowanie" (sprężystość, rozmiar).
+  const PIECE_SETS = [
+    { name:'Geometryczne', kinds:['p3','p4','p5','p6','diamond'], count:15, size:1.0,  rest:0.45, flutter:0.6 },
+    { name:'Listki',       kinds:['leaf'],                         count:13, size:1.3,  rest:0.30, flutter:1.6 },
+    { name:'Motylki',      kinds:['butterfly'],                    count:11, size:1.35, rest:0.42, flutter:1.8 },
+    { name:'Klejnoty',     kinds:['gem','diamond'],                count:17, size:0.85, rest:0.62, flutter:0.4 },
+  ];
 
-  const halfWedge = () => Math.PI / state.segments; // połowa kąta klina
+  // ---------- Kolory (glass) ----------
+  const hx = c => { c = c.replace('#',''); return [parseInt(c.slice(0,2),16), parseInt(c.slice(2,4),16), parseInt(c.slice(4,6),16)]; };
+  const mix = (a,b,t) => [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
+  const rgb = c => `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`;
+  function colorsFor(hex) {
+    const base = hx(hex);
+    return { base: rgb(base), light: rgb(mix(base,[255,255,255],0.6)), dark: rgb(mix(base,[0,0,0],0.45)) };
+  }
+
+  // ---------- Szkiełka ----------
+  // Wszystkie szkiełka żyją w JEDNEJ komorze (jednym klinie). Ściany klina to
+  // lustra: szkiełko odbija się od nich, a pozostałe segmenty to lustrzane
+  // kopie tej samej komory. Szkiełka zderzają się też MIĘDZY SOBĄ i układają wzór.
+  const particles = [];
+  let R = 300;                 // promień w pikselach urządzenia
+  const R_IN = 0.03;           // mały otwór w środku (ułamek R)
+  const halfWedge = () => Math.PI / state.segments;
 
   function makeParticles() {
     particles.length = 0;
+    const set = PIECE_SETS[state.pieceSet];
     const cols = PALETTES[state.palette];
     const hw = halfWedge();
-    for (let i = 0; i < N; i++) {
-      // rozłóż szkiełka wewnątrz klina wycelowanego w oś +X, w [-hw, hw]
-      const ang = (Math.random() * 2 - 1) * hw * 0.85;
-      const rad = (R_IN + Math.sqrt(Math.random()) * (0.85 - R_IN)) * R;
+    for (let i = 0; i < set.count; i++) {
+      const ang = (Math.random() * 2 - 1) * hw * 0.8;
+      const rad = (R_IN + Math.sqrt(Math.random()) * (0.82 - R_IN)) * R;
+      const r = R * (0.055 + Math.random() * 0.075) * set.size;
+      const hex = cols[i % cols.length];
       particles.push({
-        x: Math.cos(ang) * rad,
-        y: Math.sin(ang) * rad,
-        vx: (Math.random() - .5) * 40,
-        vy: (Math.random() - .5) * 40,
-        r: R * (0.05 + Math.random() * 0.09),
-        color: cols[i % cols.length],
-        shape: Math.random() < 0.5 ? 'circle' : 'poly',
-        sides: 3 + (Math.floor(Math.random() * 4)),
-        rot: Math.random() * Math.PI,
-        vrot: (Math.random() - .5) * 2,
+        x: Math.cos(ang) * rad, y: Math.sin(ang) * rad,
+        vx: (Math.random()-.5)*30, vy: (Math.random()-.5)*30,
+        r, m: r*r,
+        e: set.rest,
+        kind: set.kinds[(Math.random()*set.kinds.length)|0],
+        hex, col: colorsFor(hex),
+        rot: Math.random()*Math.PI*2,
+        vrot: (Math.random()-.5) * set.flutter,
       });
     }
   }
 
-  // Odbicie wektora (pozycji lub prędkości) względem prostej przez środek
-  // o kierunku (cos phi, sin phi) — czyli lustro pod kątem phi.
   function reflect(x, y, phi) {
     const dx = Math.cos(phi), dy = Math.sin(phi);
-    const dot = x * dx + y * dy;
-    return [2 * dot * dx - x, 2 * dot * dy - y];
+    const dot = x*dx + y*dy;
+    return [2*dot*dx - x, 2*dot*dy - y];
   }
 
-  // ---------- Rozmiar / DPR ----------
+  // ---------- Rozmiar ----------
   function resize() {
     const cssSize = Math.min(window.innerWidth, window.innerHeight);
     const px = Math.round(cssSize * state.dpr);
     view.width = px; view.height = px;
-    // Scena kwadratowa, wystarczająco duża by pokryć klin
     scene.width = px; scene.height = px;
     R = px / 2;
     if (particles.length === 0) makeParticles();
@@ -182,313 +191,360 @@
   window.addEventListener('resize', resize);
 
   // ---------- Fizyka ----------
-  const GRAV = 900;        // siła grawitacji (px/s^2 skala)
-  const REST = 0.72;       // odbicie od ściany
-  const FRICTION = 0.985;  // opór ruchu szkiełek
-  const SPIN_FRICTION = 0.97;
+  const GRAV = 1100, FRICTION = 0.99, SPIN_FRICTION = 0.965, ANG_FRICTION = 0.985;
 
   function step(dt) {
-    // Grawitacja w układzie ekranu -> obróć do układu wzoru (obróconego o theta)
+    // grawitacja w układzie obróconej komory
     const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
-    const gLocalX = (state.gx * c - state.gy * s) * GRAV;
-    const gLocalY = (state.gx * s + state.gy * c) * GRAV;
-
-    // Wirowanie tworzy siłę odśrodkową i Coriolisa (pieces "rozjeżdżają się" przy kręceniu)
+    const gX = (state.gx*c - state.gy*s) * GRAV;
+    const gY = (state.gx*s + state.gy*c) * GRAV;
     const w = state.omega;
 
     for (const p of particles) {
-      // grawitacja
-      p.vx += gLocalX * dt;
-      p.vy += gLocalY * dt;
-      // odśrodkowa + Coriolis od spinu
-      p.vx += (w * w * p.x + 2 * w * p.vy) * dt;
-      p.vy += (w * w * p.y - 2 * w * p.vx) * dt;
-
+      p.vx += gX*dt; p.vy += gY*dt;
+      // siły pozorne od wirowania (odśrodkowa + Coriolis)
+      p.vx += (w*w*p.x + 2*w*p.vy) * dt;
+      p.vy += (w*w*p.y - 2*w*p.vx) * dt;
       p.vx *= FRICTION; p.vy *= FRICTION;
-      p.x += p.vx * dt;  p.y += p.vy * dt;
-      p.rot += p.vrot * dt;
+      p.x += p.vx*dt; p.y += p.vy*dt;
+      p.rot += p.vrot*dt; p.vrot *= ANG_FRICTION;
+    }
 
-      // --- Lustra klina: dwie ściany promieniowe pod kątem +/- hw ---
-      // Szkiełko, które by je przekroczyło, odbija się (i tak samo jego
-      // prędkość) — dokładnie jak realne szkiełko odbite w lustrze.
-      const hw = halfWedge();
-      let a = Math.atan2(p.y, p.x);
-      if (a > hw) {
-        [p.x, p.y]   = reflect(p.x, p.y, hw);
-        [p.vx, p.vy] = reflect(p.vx, p.vy, hw);
-      } else if (a < -hw) {
-        [p.x, p.y]   = reflect(p.x, p.y, -hw);
-        [p.vx, p.vy] = reflect(p.vx, p.vy, -hw);
-      }
-
-      // --- Ściana zewnętrzna (obudowa) i mały otwór w centrum ---
-      const dist = Math.hypot(p.x, p.y) || 1e-6;
-      const nx = p.x / dist, ny = p.y / dist;
-      const outer = R - p.r;
-      const inner = R_IN * R + p.r;
-      if (dist > outer) {
-        p.x = nx * outer; p.y = ny * outer;
-        const vn = p.vx * nx + p.vy * ny;
-        p.vx -= (1 + REST) * vn * nx;
-        p.vy -= (1 + REST) * vn * ny;
-      } else if (dist < inner) {
-        p.x = nx * inner; p.y = ny * inner;
-        const vn = p.vx * nx + p.vy * ny;
-        p.vx -= (1 + REST) * vn * nx;
-        p.vy -= (1 + REST) * vn * ny;
+    // kolizje między szkiełkami (kule ograniczające) — tworzą wzór
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i+1; j < particles.length; j++) {
+        const a = particles[i], b = particles[j];
+        let dx = b.x-a.x, dy = b.y-a.y;
+        let d = Math.hypot(dx,dy);
+        const min = a.r + b.r;
+        if (d > 0 && d < min) {
+          const nx = dx/d, ny = dy/d, overlap = min-d, tot = a.m+b.m;
+          a.x -= nx*overlap*(b.m/tot); a.y -= ny*overlap*(b.m/tot);
+          b.x += nx*overlap*(a.m/tot); b.y += ny*overlap*(a.m/tot);
+          const vn = (b.vx-a.vx)*nx + (b.vy-a.vy)*ny;
+          if (vn < 0) {
+            const e = Math.min(a.e, b.e);
+            const imp = -(1+e)*vn/tot;
+            a.vx -= imp*b.m*nx; a.vy -= imp*b.m*ny;
+            b.vx += imp*a.m*nx; b.vy += imp*a.m*ny;
+            a.vrot += (Math.random()-.5)*0.5; b.vrot += (Math.random()-.5)*0.5;
+          }
+        }
       }
     }
 
-    // spin z tarciem
-    state.theta += state.omega * dt;
+    // ściany komory: lustra (kliny) + obudowa + otwór w środku
+    const hw = halfWedge();
+    for (const p of particles) {
+      let ang = Math.atan2(p.y, p.x);
+      if (ang > hw)      { [p.x,p.y]=reflect(p.x,p.y,hw);  [p.vx,p.vy]=reflect(p.vx,p.vy,hw); }
+      else if (ang < -hw){ [p.x,p.y]=reflect(p.x,p.y,-hw); [p.vx,p.vy]=reflect(p.vx,p.vy,-hw); }
+
+      const dist = Math.hypot(p.x,p.y) || 1e-6;
+      const nx = p.x/dist, ny = p.y/dist;
+      const outer = R - p.r, inner = R_IN*R + p.r;
+      if (dist > outer) {
+        p.x = nx*outer; p.y = ny*outer;
+        const vn = p.vx*nx + p.vy*ny;
+        p.vx -= (1+p.e)*vn*nx; p.vy -= (1+p.e)*vn*ny;
+      } else if (dist < inner) {
+        p.x = nx*inner; p.y = ny*inner;
+        const vn = p.vx*nx + p.vy*ny;
+        p.vx -= (1+p.e)*vn*nx; p.vy -= (1+p.e)*vn*ny;
+      }
+    }
+
+    state.theta += state.omega*dt;
     state.omega *= SPIN_FRICTION;
+    // światło płynnie podąża za przechyłem (przeciwnie do grawitacji)
+    state.lx += (-state.gx - state.lx)*0.08;
+    state.ly += (-state.gy - state.ly)*0.08;
   }
 
-  // ---------- Rysowanie sceny (jeden pełny obraz szkiełek) ----------
-  function drawScene() {
-    sctx.setTransform(1, 0, 0, 1, 0, 0);
-    sctx.clearRect(0, 0, scene.width, scene.height);
-    sctx.save();
-    sctx.translate(R, R);
-    sctx.globalCompositeOperation = 'lighter'; // świecące, „szklane" nakładanie
-    for (const p of particles) {
-      sctx.save();
-      sctx.translate(p.x, p.y);
-      sctx.rotate(p.rot);
-      const g = sctx.createRadialGradient(0, 0, 0, 0, 0, p.r);
-      g.addColorStop(0, p.color);
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      sctx.fillStyle = g;
-      sctx.globalAlpha = 0.9;
-      sctx.beginPath();
-      if (p.shape === 'circle') {
-        sctx.arc(0, 0, p.r, 0, Math.PI * 2);
-      } else {
-        for (let i = 0; i < p.sides; i++) {
-          const a = (i / p.sides) * Math.PI * 2;
-          const x = Math.cos(a) * p.r, y = Math.sin(a) * p.r;
-          i === 0 ? sctx.moveTo(x, y) : sctx.lineTo(x, y);
-        }
-        sctx.closePath();
+  // ---------- Kształty szkiełek ----------
+  function pathShape(g, kind, r) {
+    g.beginPath();
+    if (kind[0] === 'p') {                    // wielokąt foremny p3..p6
+      const n = +kind.slice(1);
+      for (let i = 0; i < n; i++) {
+        const a = -Math.PI/2 + i/n*Math.PI*2;
+        const x = Math.cos(a)*r, y = Math.sin(a)*r;
+        i ? g.lineTo(x,y) : g.moveTo(x,y);
       }
-      sctx.fill();
-      sctx.restore();
+      g.closePath();
+    } else if (kind === 'diamond') {          // romb
+      g.moveTo(0,-r); g.lineTo(r*0.62,0); g.lineTo(0,r); g.lineTo(-r*0.62,0); g.closePath();
+    } else if (kind === 'leaf') {             // listek
+      g.moveTo(0,-r); g.quadraticCurveTo(r*0.75,0, 0,r); g.quadraticCurveTo(-r*0.75,0, 0,-r); g.closePath();
+    } else if (kind === 'gem') {              // klejnot (sześciokąt)
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI/2 + i/6*Math.PI*2;
+        const x = Math.cos(a)*r, y = Math.sin(a)*r*0.9;
+        i ? g.lineTo(x,y) : g.moveTo(x,y);
+      }
+      g.closePath();
+    } else if (kind === 'butterfly') {        // motylek (4 skrzydła)
+      g.ellipse(-r*0.45,-r*0.20, r*0.5, r*0.62, -0.5, 0, Math.PI*2);
+      g.ellipse( r*0.45,-r*0.20, r*0.5, r*0.62,  0.5, 0, Math.PI*2);
+      g.ellipse(-r*0.34, r*0.34, r*0.38, r*0.44, 0.6, 0, Math.PI*2);
+      g.ellipse( r*0.34, r*0.34, r*0.38, r*0.44,-0.6, 0, Math.PI*2);
     }
+  }
+
+  function drawPiece(g, p) {
+    g.save();
+    g.translate(p.x, p.y);
+    g.rotate(p.rot);
+    // szklane wypełnienie z gradientem światła
+    const grad = g.createLinearGradient(-p.r*0.7,-p.r*0.7, p.r*0.7,p.r*0.7);
+    grad.addColorStop(0, p.col.light);
+    grad.addColorStop(0.55, p.col.base);
+    grad.addColorStop(1, p.col.dark);
+    g.globalAlpha = 0.92;
+    g.fillStyle = grad;
+    pathShape(g, p.kind, p.r);
+    g.fill();
+    // ciemny kontur -> sztywna krawędź szkiełka
+    g.globalAlpha = 0.5;
+    g.lineWidth = Math.max(1, p.r*0.05);
+    g.strokeStyle = p.col.dark;
+    g.stroke();
+    // detale (żyłka listka / korpus motyla / fasety klejnotu)
+    g.globalAlpha = 0.45;
+    g.strokeStyle = p.col.dark;
+    g.beginPath();
+    if (p.kind === 'leaf') {
+      g.moveTo(0,-p.r*0.9); g.lineTo(0,p.r*0.9);
+    } else if (p.kind === 'butterfly') {
+      g.moveTo(0,-p.r*0.5); g.lineTo(0,p.r*0.55);
+    } else if (p.kind === 'gem') {
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI/2 + i/6*Math.PI*2;
+        g.moveTo(0,0); g.lineTo(Math.cos(a)*p.r, Math.sin(a)*p.r*0.9);
+      }
+    }
+    g.stroke();
+    g.restore();
+  }
+
+  // ---------- Rysowanie komory (tło prążkowane + szkiełka) ----------
+  function drawScene() {
+    sctx.setTransform(1,0,0,1,0,0);
+    sctx.clearRect(0,0,scene.width,scene.height);
+    sctx.save();
+    sctx.translate(R,R);
+
+    // podświetlone, mleczne tło
+    const bg = sctx.createRadialGradient(0,0,0, 0,0,R);
+    bg.addColorStop(0,'#fbfbff'); bg.addColorStop(0.7,'#e9e9f2'); bg.addColorStop(1,'#cdcddb');
+    sctx.fillStyle = bg;
+    sctx.beginPath(); sctx.arc(0,0,R,0,Math.PI*2); sctx.fill();
+
+    // prążki: cienkie linie promieniste (jak w prawdziwym kalejdoskopie)
+    sctx.strokeStyle = 'rgba(90,90,120,0.10)';
+    sctx.lineWidth = 1;
+    sctx.beginPath();
+    const stripes = 140;
+    for (let i = 0; i < stripes; i++) {
+      const a = i/stripes*Math.PI*2;
+      sctx.moveTo(0,0); sctx.lineTo(Math.cos(a)*R, Math.sin(a)*R);
+    }
+    sctx.stroke();
+
+    // szkiełka (sztywne, nieprzezroczyste) — kolejność wg głębi (r rosnąco)
+    const order = particles.slice().sort((a,b)=>a.r-b.r);
+    for (const p of order) drawPiece(sctx, p);
+
     sctx.restore();
   }
 
-  // ---------- Kompozycja kalejdoskopu (klin + lustra) ----------
+  // ---------- Kompozycja: klin + lustra ----------
   function render() {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, view.width, view.height);
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,view.width,view.height);
     ctx.save();
-    ctx.translate(R, R);
+    ctx.translate(R,R);
     ctx.rotate(state.theta);
-
-    const wedge = Math.PI * 2 / state.segments; // kąt jednego klina
+    const wedge = Math.PI*2 / state.segments;
     for (let i = 0; i < state.segments; i++) {
       ctx.save();
-      ctx.rotate(i * wedge);
-      if (i % 2 === 1) ctx.scale(1, -1);  // lustrzane odbicie co drugi klin -> pełna symetria
-      // maska klina
+      ctx.rotate(i*wedge);
+      if (i % 2 === 1) ctx.scale(1,-1);   // lustrzane odbicie co drugi klin
       ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, R, -wedge / 2, wedge / 2);
+      ctx.moveTo(0,0);
+      ctx.arc(0,0,R,-wedge/2,wedge/2);
       ctx.closePath();
       ctx.clip();
-      ctx.drawImage(scene, -R, -R);
+      ctx.drawImage(scene,-R,-R);
       ctx.restore();
     }
     ctx.restore();
 
-    // delikatna winieta wewnątrz koła
-    const vg = ctx.createRadialGradient(R, R, R * 0.6, R, R, R);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    // sheen: rozświetlenie podążające za światłem/przechyłem (iluzja wpadającego światła)
+    const lx = R + state.lx*R*0.55, ly = R + state.ly*R*0.55;
+    const sg = ctx.createRadialGradient(lx,ly,R*0.05, R,R,R*1.1);
+    sg.addColorStop(0,'rgba(255,255,255,0.28)');
+    sg.addColorStop(0.5,'rgba(255,255,255,0.05)');
+    sg.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.save();
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.fillStyle = sg;
+    ctx.beginPath(); ctx.arc(R,R,R,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // winieta -> krawędź tubusu
+    const vg = ctx.createRadialGradient(R,R,R*0.62, R,R,R);
+    vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.6)');
     ctx.fillStyle = vg;
-    ctx.beginPath(); ctx.arc(R, R, R, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(R,R,R,0,Math.PI*2); ctx.fill();
   }
 
   // ---------- Pętla ----------
   let last = performance.now();
   function loop(now) {
-    let dt = (now - last) / 1000; last = now;
-    if (dt > 0.05) dt = 0.05; // stabilność przy zacięciach
-    step(dt);
-    drawScene();
-    render();
+    let dt = (now-last)/1000; last = now;
+    if (dt > 0.05) dt = 0.05;
+    step(dt); drawScene(); render();
     requestAnimationFrame(loop);
   }
 
-  // ---------- Sensory: grawitacja (obrót) + wstrząs ----------
+  // ---------- Sensory ----------
   let lastShake = 0;
   function onMotion(e) {
     state.hasMotion = true;
     const g = e.accelerationIncludingGravity;
-    if (g && (g.x != null)) {
-      // Normalizujemy do kierunku "w dół" na ekranie.
-      // Oś X telefonu w prawo, Y w górę -> na ekranie Y rośnie w dół, stąd znaki.
+    if (g && g.x != null) {
       let gx = -g.x, gy = g.y;
-      const mag = Math.hypot(gx, gy) || 1;
-      // płynne dążenie do nowego kierunku grawitacji
-      state.gx += ((gx / mag) - state.gx) * 0.15;
-      state.gy += ((gy / mag) - state.gy) * 0.15;
+      const mag = Math.hypot(gx,gy) || 1;
+      state.gx += ((gx/mag) - state.gx)*0.15;
+      state.gy += ((gy/mag) - state.gy)*0.15;
     }
-    // Wstrząs: gwałtowne przyspieszenie bez grawitacji
     const a = e.acceleration;
     if (a && a.x != null) {
-      const m = Math.hypot(a.x, a.y, a.z || 0);
-      const t = performance.now();
-      if (m > 16 && t - lastShake > 300) {
-        lastShake = t;
-        scatter(m);
-      }
+      const m = Math.hypot(a.x, a.y, a.z||0), t = performance.now();
+      if (m > 16 && t-lastShake > 300) { lastShake = t; scatter(m); }
     }
   }
 
   function scatter(force = 20) {
-    const k = Math.min(force, 40) * 12;
+    const k = Math.min(force,40)*13;
     for (const p of particles) {
-      p.vx += (Math.random() - .5) * k;
-      p.vy += (Math.random() - .5) * k;
-      p.vrot += (Math.random() - .5) * 6;
+      p.vx += (Math.random()-.5)*k;
+      p.vy += (Math.random()-.5)*k;
+      p.vrot += (Math.random()-.5)*4;
     }
-    state.omega += (Math.random() - .5) * 3;
+    state.omega += (Math.random()-.5)*2.5;
     if (navigator.vibrate) navigator.vibrate(30);
   }
 
-  // ---------- Dotyk: kręcenie palcem (moment obrotowy + bezwładność) ----------
+  // ---------- Dotyk: kręcenie palcem ----------
   let dragging = false, lastAngle = 0, lastT = 0;
-  function pointerAngle(clientX, clientY) {
-    const rect = view.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    return Math.atan2(clientY - cy, clientX - cx);
+  function pointerAngle(cx, cy) {
+    const r = view.getBoundingClientRect();
+    return Math.atan2(cy - (r.top+r.height/2), cx - (r.left+r.width/2));
   }
-  function onDown(x, y) {
-    dragging = true;
-    lastAngle = pointerAngle(x, y);
-    lastT = performance.now();
-    state.omega *= 0.3; // złap obraz
-  }
-  function onMove(x, y) {
+  function onDown(x,y){ dragging=true; lastAngle=pointerAngle(x,y); lastT=performance.now(); state.omega*=0.3; }
+  function onMove(x,y){
     if (!dragging) return;
-    const a = pointerAngle(x, y);
-    let d = a - lastAngle;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    const now = performance.now();
-    const dt = Math.max((now - lastT) / 1000, 0.001);
-    state.theta += d;
-    state.omega = d / dt; // prędkość -> bezwładność po puszczeniu
-    lastAngle = a; lastT = now;
+    const a = pointerAngle(x,y);
+    let d = a-lastAngle;
+    while (d>Math.PI) d-=Math.PI*2; while (d<-Math.PI) d+=Math.PI*2;
+    const now = performance.now(), dt = Math.max((now-lastT)/1000,0.001);
+    state.theta += d; state.omega = d/dt; lastAngle=a; lastT=now;
   }
-  function onUp() { dragging = false; }
+  function onUp(){ dragging=false; }
 
-  view.addEventListener('touchstart', e => { const t = e.touches[0]; onDown(t.clientX, t.clientY); }, {passive:true});
-  view.addEventListener('touchmove',  e => { const t = e.touches[0]; onMove(t.clientX, t.clientY); }, {passive:true});
+  view.addEventListener('touchstart', e=>{const t=e.touches[0]; onDown(t.clientX,t.clientY);}, {passive:true});
+  view.addEventListener('touchmove',  e=>{const t=e.touches[0]; onMove(t.clientX,t.clientY);}, {passive:true});
   view.addEventListener('touchend', onUp, {passive:true});
-  view.addEventListener('mousedown', e => onDown(e.clientX, e.clientY));
-  window.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
+  view.addEventListener('mousedown', e=>onDown(e.clientX,e.clientY));
+  window.addEventListener('mousemove', e=>onMove(e.clientX,e.clientY));
   window.addEventListener('mouseup', onUp);
 
-  // Fallback na desktopie: strzałki obracają "grawitację"
-  window.addEventListener('keydown', e => {
-    const step = 0.2;
-    if (e.key === 'ArrowLeft')  { const a = Math.atan2(state.gy, state.gx) - step; state.gx = Math.cos(a); state.gy = Math.sin(a); }
-    if (e.key === 'ArrowRight') { const a = Math.atan2(state.gy, state.gx) + step; state.gx = Math.cos(a); state.gy = Math.sin(a); }
-    if (e.key === ' ') scatter(30);
+  // Desktop bez żyroskopu: przechył symulujemy strzałkami; spacja = wstrząs.
+  window.addEventListener('keydown', e=>{
+    const st = 0.25;
+    if (e.key==='ArrowLeft'){ const a=Math.atan2(state.gy,state.gx)-st; state.gx=Math.cos(a); state.gy=Math.sin(a); }
+    if (e.key==='ArrowRight'){ const a=Math.atan2(state.gy,state.gx)+st; state.gx=Math.cos(a); state.gy=Math.sin(a); }
+    if (e.key==='ArrowUp'){ state.gx=0; state.gy=1; }   // reset: w dół
+    if (e.key===' '){ e.preventDefault(); scatter(30); }
   });
 
-  // ---------- Przyciski UI ----------
+  // ---------- UI ----------
   const hudSeg = document.getElementById('hud-seg');
+  const hudSet = document.getElementById('hud-set');
   const hudSensor = document.getElementById('hud-sensor');
 
-  document.getElementById('btn-segments').addEventListener('click', () => {
-    const opts = [4, 6, 8, 10, 12];
-    const idx = (opts.indexOf(state.segments) + 1) % opts.length;
-    state.segments = opts[idx];
+  document.getElementById('btn-segments').addEventListener('click', ()=>{
+    const opts = [6, 8];
+    state.segments = opts[(opts.indexOf(state.segments)+1) % opts.length];
     hudSeg.textContent = 'Symetria: ' + state.segments;
-    // zwiń szkiełka do nowego (mniejszego/większego) klina
     const hw = halfWedge();
     for (const p of particles) {
-      let a = Math.atan2(p.y, p.x);
-      if (a > hw || a < -hw) {
-        const rad = Math.hypot(p.x, p.y);
-        const na = Math.max(-hw, Math.min(hw, a)) * 0.9;
-        p.x = Math.cos(na) * rad; p.y = Math.sin(na) * rad;
-        p.vx *= 0.3; p.vy *= 0.3;
+      const a = Math.atan2(p.y,p.x);
+      if (a>hw || a<-hw) {
+        const rad = Math.hypot(p.x,p.y);
+        const na = Math.max(-hw, Math.min(hw,a))*0.9;
+        p.x = Math.cos(na)*rad; p.y = Math.sin(na)*rad; p.vx*=0.3; p.vy*=0.3;
       }
     }
   });
-  document.getElementById('btn-scatter').addEventListener('click', () => scatter(30));
-  document.getElementById('btn-palette').addEventListener('click', () => {
-    state.palette = (state.palette + 1) % PALETTES.length;
-    const cols = PALETTES[state.palette];
-    particles.forEach((p, i) => p.color = cols[i % cols.length]);
+
+  document.getElementById('btn-set').addEventListener('click', ()=>{
+    state.pieceSet = (state.pieceSet+1) % PIECE_SETS.length;
+    hudSet.textContent = 'Szkiełka: ' + PIECE_SETS[state.pieceSet].name;
+    makeParticles();
   });
 
-  // ---------- Zdjęcie: zapis + udostępnienie ----------
+  document.getElementById('btn-scatter').addEventListener('click', ()=>scatter(30));
+
+  document.getElementById('btn-palette').addEventListener('click', ()=>{
+    state.palette = (state.palette+1) % PALETTES.length;
+    const cols = PALETTES[state.palette];
+    particles.forEach((p,i)=>{ p.hex = cols[i%cols.length]; p.col = colorsFor(p.hex); });
+  });
+
+  // ---------- Zdjęcie ----------
   const flash = document.getElementById('flash');
   const toast = document.getElementById('toast');
-  function showToast(msg) {
-    toast.textContent = msg; toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 1800);
-  }
-  function doFlash() {
-    flash.style.transition = 'none'; flash.style.opacity = '0.9';
-    requestAnimationFrame(() => { flash.style.transition = 'opacity .4s'; flash.style.opacity = '0'; });
+  function showToast(msg){ toast.textContent=msg; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),1800); }
+  function doFlash(){
+    flash.style.transition='none'; flash.style.opacity='0.9';
+    requestAnimationFrame(()=>{ flash.style.transition='opacity .4s'; flash.style.opacity='0'; });
     if (navigator.vibrate) navigator.vibrate(15);
   }
-
-  document.getElementById('btn-shot').addEventListener('click', async () => {
+  document.getElementById('btn-shot').addEventListener('click', async ()=>{
     doFlash();
-    const blob = await new Promise(res => view.toBlob(res, 'image/png'));
+    const blob = await new Promise(res=>view.toBlob(res,'image/png'));
     if (!blob) { showToast('Nie udało się zapisać'); return; }
     const fname = `kalejdoskop-${Date.now()}.png`;
-    const file = new File([blob], fname, { type: 'image/png' });
-
-    // 1) Natywne udostępnianie (mail / social / zapis) — telefony
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: 'Mój kalejdoskop' });
-        return;
-      } catch (_) { /* użytkownik anulował -> spróbuj pobrać */ }
+    const file = new File([blob], fname, {type:'image/png'});
+    if (navigator.canShare && navigator.canShare({files:[file]})) {
+      try { await navigator.share({files:[file], title:'Mój kalejdoskop'}); return; }
+      catch(_) {}
     }
-    // 2) Zapis na dysk — desktop / brak Web Share
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = fname; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
     showToast('Zapisano: ' + fname);
   });
 
-  // ---------- Start / zgoda na sensory (iOS wymaga gestu) ----------
+  // ---------- Start / zgoda na sensory ----------
   const gate = document.getElementById('gate');
-  document.getElementById('gate-start').addEventListener('click', async () => {
+  document.getElementById('gate-start').addEventListener('click', async ()=>{
     let granted = false;
     try {
-      if (typeof DeviceMotionEvent !== 'undefined' &&
-          typeof DeviceMotionEvent.requestPermission === 'function') {
-        const res = await DeviceMotionEvent.requestPermission();
-        granted = (res === 'granted');
-      } else {
-        granted = true; // Android / desktop — bez pytania
-      }
-    } catch (_) { granted = false; }
-
-    if (granted) {
-      window.addEventListener('devicemotion', onMotion);
-      hudSensor.textContent = 'Sensory: aktywne';
-    } else {
-      hudSensor.textContent = 'Sensory: brak (użyj palca)';
-    }
-    // odblokuj vibrate/pierwsza klatka
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        granted = (await DeviceMotionEvent.requestPermission()) === 'granted';
+      } else { granted = true; }
+    } catch(_) { granted = false; }
+    if (granted) { window.addEventListener('devicemotion', onMotion); hudSensor.textContent = 'Sensory: aktywne'; }
+    else { hudSensor.textContent = 'Sensory: brak (użyj strzałek/palca)'; }
     resize();
     gate.classList.add('hidden');
   });
 
-  // init
   resize();
   requestAnimationFrame(loop);
 })();
