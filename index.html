@@ -41,6 +41,7 @@
   }
   button:active { transform: scale(.94); background: rgba(255,255,255,.2); }
   button.primary { background: linear-gradient(135deg,#7c5cff,#ff5ca8); }
+  button.on { background: linear-gradient(135deg,#ffd15c,#ff8a5c); color:#241a00; }
   #gate {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: radial-gradient(circle at 50% 40%, #171730, #08080f);
@@ -54,7 +55,7 @@
     position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
     background: rgba(20,20,30,.9); border: 1px solid rgba(255,255,255,.15);
     padding: 10px 16px; border-radius: 12px; font-size: 13px; opacity: 0;
-    transition: opacity .25s; pointer-events: none; z-index: 30;
+    transition: opacity .25s; pointer-events: none; z-index: 30; text-align:center;
   }
   #toast.show { opacity: 1; }
   #flash {
@@ -76,10 +77,12 @@
   <div id="bar">
     <button id="btn-set">Szkiełka</button>
     <button id="btn-segments">Symetria</button>
+    <button id="btn-light">Światło</button>
     <button id="btn-scatter">Wstrząśnij</button>
     <button id="btn-palette">Kolory</button>
     <button id="btn-shot" class="primary">Zrób zdjęcie</button>
   </div>
+  <video id="cam" playsinline muted style="position:fixed;width:2px;height:2px;opacity:0;pointer-events:none;left:-10px;top:-10px"></video>
 
   <div id="flash"></div>
   <div id="toast"></div>
@@ -88,7 +91,7 @@
     <div class="card">
       <h1>✦ Kalejdoskop ✦</h1>
       <p>Obracaj i&nbsp;potrząsaj telefonem, kręć obraz palcem.
-         Szkiełka opadają, zderzają się i&nbsp;układają wzór.</p>
+         Szkiełka opadają, zderzają się i&nbsp;układają w&nbsp;stertki jak w&nbsp;prawdziwym pojemniku.</p>
       <p style="margin-top:18px; font-size:12px; opacity:.6">
          Na&nbsp;telefonie przeglądarka poprosi o&nbsp;dostęp do&nbsp;czujników ruchu.</p>
       <button id="gate-start" class="primary" style="margin-top:18px; padding:14px 28px; font-size:16px;">
@@ -101,53 +104,45 @@
 "use strict";
 (() => {
   const view = document.getElementById('view');
-  const ctx = view.getContext('2d');
-  const scene = document.createElement('canvas');
+  let ctx2d = null;                               // kontekst 2D tylko dla fallbacku (bez WebGL)
+  const scene = document.createElement('canvas'); // komora (jeden klin) rysowana w 2D -> tekstura
   const sctx = scene.getContext('2d');
 
   // ---------- Stan ----------
   const state = {
-    segments: 6,            // liczba osi symetrii (6 lub 8)
-    theta: 0, omega: 0,     // obrót kalejdoskopu i prędkość kątowa (spin)
-    gx: 0, gy: 1,           // kierunek grawitacji w układzie ekranu (domyślnie w dół)
-    lx: 0, ly: -1,          // kierunek światła (przeciwny do grawitacji) -> sheen
+    segments: 6,
+    theta: 0, omega: 0,
+    gx: 0, gy: 1, pgx: 0, pgy: 1,   // grawitacja teraz / poprzednio (do mikro-drgań)
+    lx: 0, ly: -1,                  // kierunek światła (sheen)
+    lightI: 0.45, flicker: 1,       // natężenie i lekkie migotanie światła
     dpr: Math.min(window.devicePixelRatio || 1, 2),
-    palette: 0,
-    pieceSet: 0,
-    hasMotion: false,
+    palette: 0, pieceSet: 0,
+    hasMotion: false, time: 0,
   };
 
   const PALETTES = [
     ['#e84393','#6c5ce7','#00b4d8','#2ecc71','#f1c40f','#e67e22'],
     ['#f72585','#b5179e','#7209b7','#4361ee','#4cc9f0','#06d6a0'],
-    ['#d90429','#ef233c','#8d99ae','#2b2d42','#fca311','#e5e5e5'],
+    ['#d90429','#ef233c','#8d99ae','#3a0ca3','#fca311','#e5e5e5'],
     ['#ff9e00','#ff6d00','#c9184a','#7b2cbf','#3a0ca3','#00b4d8'],
   ];
 
-  // Zestawy szkiełek — różne kształty i różne "zachowanie" (sprężystość, rozmiar).
   const PIECE_SETS = [
-    { name:'Geometryczne', kinds:['p3','p4','p5','p6','diamond'], count:15, size:1.0,  rest:0.45, flutter:0.6 },
-    { name:'Listki',       kinds:['leaf'],                         count:13, size:1.3,  rest:0.30, flutter:1.6 },
-    { name:'Motylki',      kinds:['butterfly'],                    count:11, size:1.35, rest:0.42, flutter:1.8 },
-    { name:'Klejnoty',     kinds:['gem','diamond'],                count:17, size:0.85, rest:0.62, flutter:0.4 },
+    { name:'Geometryczne', kinds:['p3','p4','p5','p6','diamond'], count:16, size:1.0,  rest:0.35 },
+    { name:'Listki',       kinds:['leaf'],                         count:14, size:1.3,  rest:0.28 },
+    { name:'Motylki',      kinds:['butterfly'],                    count:12, size:1.35, rest:0.32 },
+    { name:'Klejnoty',     kinds:['gem','diamond'],                count:18, size:0.85, rest:0.42 },
   ];
 
-  // ---------- Kolory (glass) ----------
-  const hx = c => { c = c.replace('#',''); return [parseInt(c.slice(0,2),16), parseInt(c.slice(2,4),16), parseInt(c.slice(4,6),16)]; };
-  const mix = (a,b,t) => [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
+  const hx = c => { c=c.replace('#',''); return [parseInt(c.slice(0,2),16),parseInt(c.slice(2,4),16),parseInt(c.slice(4,6),16)]; };
+  const mix = (a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];
   const rgb = c => `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`;
-  function colorsFor(hex) {
-    const base = hx(hex);
-    return { base: rgb(base), light: rgb(mix(base,[255,255,255],0.6)), dark: rgb(mix(base,[0,0,0],0.45)) };
-  }
+  const colorsFor = hex => { const b=hx(hex); return { base:rgb(b), light:rgb(mix(b,[255,255,255],0.6)), dark:rgb(mix(b,[0,0,0],0.45)) }; };
 
   // ---------- Szkiełka ----------
-  // Wszystkie szkiełka żyją w JEDNEJ komorze (jednym klinie). Ściany klina to
-  // lustra: szkiełko odbija się od nich, a pozostałe segmenty to lustrzane
-  // kopie tej samej komory. Szkiełka zderzają się też MIĘDZY SOBĄ i układają wzór.
   const particles = [];
-  let R = 300;                 // promień w pikselach urządzenia
-  const R_IN = 0.03;           // mały otwór w środku (ułamek R)
+  let R = 300;
+  const R_IN = 0.03;
   const halfWedge = () => Math.PI / state.segments;
 
   function makeParticles() {
@@ -156,396 +151,401 @@
     const cols = PALETTES[state.palette];
     const hw = halfWedge();
     for (let i = 0; i < set.count; i++) {
-      const ang = (Math.random() * 2 - 1) * hw * 0.8;
-      const rad = (R_IN + Math.sqrt(Math.random()) * (0.82 - R_IN)) * R;
-      const r = R * (0.055 + Math.random() * 0.075) * set.size;
-      const hex = cols[i % cols.length];
+      const ang = (Math.random()*2-1)*hw*0.75;
+      const rad = (R_IN + Math.sqrt(Math.random())*(0.8-R_IN))*R;
+      const r = R*(0.05 + Math.random()*0.07)*set.size;
+      const hex = cols[i%cols.length];
+      const x = Math.cos(ang)*rad, y = Math.sin(ang)*rad;
       particles.push({
-        x: Math.cos(ang) * rad, y: Math.sin(ang) * rad,
-        vx: (Math.random()-.5)*30, vy: (Math.random()-.5)*30,
-        r, m: r*r,
-        e: set.rest,
-        kind: set.kinds[(Math.random()*set.kinds.length)|0],
-        hex, col: colorsFor(hex),
-        rot: Math.random()*Math.PI*2,
-        vrot: (Math.random()-.5) * set.flutter,
+        x, y, px:x, py:y,
+        vx:(Math.random()-.5)*30, vy:(Math.random()-.5)*30,
+        r, m:r*r, invM:1/(r*r), e:set.rest,
+        kind:set.kinds[(Math.random()*set.kinds.length)|0],
+        hex, col:colorsFor(hex),
+        rot:Math.random()*Math.PI*2, vrot:(Math.random()-.5)*1.2,
       });
     }
   }
 
-  function reflect(x, y, phi) {
-    const dx = Math.cos(phi), dy = Math.sin(phi);
-    const dot = x*dx + y*dy;
-    return [2*dot*dx - x, 2*dot*dy - y];
+  // ---------- Fizyka: solver pozycyjny (PBD) -> stabilne stertki ----------
+  const GRAV = 1700, VDAMP = 0.994, ITER = 6;
+
+  function clampToChamber(p) {
+    const hw = halfWedge(), S = Math.sin(hw), C = Math.cos(hw);
+    // ściany-lustra (proste przez środek): trzymaj środek o p.r od ściany
+    let su = p.x*S - p.y*C;            // górna ściana, normalna (S,-C)
+    if (su < p.r) { const k = p.r-su; p.x += S*k; p.y += -C*k; }
+    let sl = p.x*S + p.y*C;            // dolna ściana, normalna (S, C)
+    if (sl < p.r) { const k = p.r-sl; p.x += S*k; p.y += C*k; }
+    // obudowa (zewnętrzny okrąg) i mały otwór w środku
+    let d = Math.hypot(p.x,p.y) || 1e-6; const outer = R-p.r;
+    if (d > outer) { p.x *= outer/d; p.y *= outer/d; }
+    d = Math.hypot(p.x,p.y) || 1e-6; const inner = R_IN*R + p.r;
+    if (d < inner) { p.x *= inner/d; p.y *= inner/d; }
+  }
+
+  function step(dt) {
+    const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
+    const gX = (state.gx*c - state.gy*s)*GRAV;
+    const gY = (state.gx*s + state.gy*c)*GRAV;
+    const w = state.omega;
+
+    // zmiana przechyłu -> lekki plastik z ~0.1-0.2mm luzu drgnie z powodu grawitacji i tarcia
+    const dTilt = Math.hypot(state.gx-state.pgx, state.gy-state.pgy);
+    state.pgx = state.gx; state.pgy = state.gy;
+    const jit = 0.15 + dTilt*40;   // amplituda mikro-drgań (px/s), sub-pikselowa w spoczynku
+
+    for (const p of particles) {
+      p.vx += (gX + w*w*p.x + 2*w*p.vy)*dt + (Math.random()-.5)*jit;
+      p.vy += (gY + w*w*p.y - 2*w*p.vx)*dt + (Math.random()-.5)*jit;
+      p.vx *= VDAMP; p.vy *= VDAMP;
+      p.px = p.x; p.py = p.y;
+      p.x += p.vx*dt; p.y += p.vy*dt;
+      p.rot += p.vrot*dt; p.vrot *= 0.95;
+    }
+
+    // relaksacja: rozdziel nakładające się szkiełka i wepchnij do komory
+    for (let it = 0; it < ITER; it++) {
+      for (let i = 0; i < particles.length; i++) {
+        const a = particles[i];
+        for (let j = i+1; j < particles.length; j++) {
+          const b = particles[j];
+          let dx = b.x-a.x, dy = b.y-a.y;
+          let d = Math.hypot(dx,dy); const min = a.r+b.r;
+          if (d > 1e-6 && d < min) {
+            const corr = (min-d), t = a.invM+b.invM, nx = dx/d, ny = dy/d;
+            a.x -= nx*corr*(a.invM/t); a.y -= ny*corr*(a.invM/t);
+            b.x += nx*corr*(b.invM/t); b.y += ny*corr*(b.invM/t);
+          }
+        }
+      }
+      for (const p of particles) clampToChamber(p);
+    }
+
+    // prędkość z ruchu pozycyjnego (PBD) + drzemka gdy prawie stoi
+    for (const p of particles) {
+      p.vx = (p.x-p.px)/dt * 0.985;
+      p.vy = (p.y-p.py)/dt * 0.985;
+      if (p.vx*p.vx + p.vy*p.vy < 3) { p.vx *= 0.5; p.vy *= 0.5; }
+    }
+
+    state.theta += state.omega*dt;
+    state.omega *= 0.965;
+    state.lx += (-state.gx - state.lx)*0.08;
+    state.ly += (-state.gy - state.ly)*0.08;
+    state.time += dt;
+    // światło żyje: delikatne migotanie (jak realne, wpadające światło)
+    state.flicker = 1 + 0.035*Math.sin(state.time*2.3) + (Math.random()-.5)*0.02;
+  }
+
+  // ---------- Kształty ----------
+  function pathShape(g, kind, r) {
+    g.beginPath();
+    if (kind[0]==='p') {
+      const n=+kind.slice(1);
+      for (let i=0;i<n;i++){ const a=-Math.PI/2+i/n*Math.PI*2, x=Math.cos(a)*r, y=Math.sin(a)*r; i?g.lineTo(x,y):g.moveTo(x,y); }
+      g.closePath();
+    } else if (kind==='diamond') {
+      g.moveTo(0,-r); g.lineTo(r*0.62,0); g.lineTo(0,r); g.lineTo(-r*0.62,0); g.closePath();
+    } else if (kind==='leaf') {
+      g.moveTo(0,-r); g.quadraticCurveTo(r*0.75,0,0,r); g.quadraticCurveTo(-r*0.75,0,0,-r); g.closePath();
+    } else if (kind==='gem') {
+      for (let i=0;i<6;i++){ const a=-Math.PI/2+i/6*Math.PI*2, x=Math.cos(a)*r, y=Math.sin(a)*r*0.9; i?g.lineTo(x,y):g.moveTo(x,y); }
+      g.closePath();
+    } else if (kind==='butterfly') {
+      g.ellipse(-r*0.45,-r*0.20,r*0.5,r*0.62,-0.5,0,Math.PI*2);
+      g.ellipse( r*0.45,-r*0.20,r*0.5,r*0.62, 0.5,0,Math.PI*2);
+      g.ellipse(-r*0.34, r*0.34,r*0.38,r*0.44,0.6,0,Math.PI*2);
+      g.ellipse( r*0.34, r*0.34,r*0.38,r*0.44,-0.6,0,Math.PI*2);
+    }
+  }
+
+  function drawPiece(g, p) {
+    g.save(); g.translate(p.x,p.y); g.rotate(p.rot);
+    const grad = g.createLinearGradient(-p.r*0.7,-p.r*0.7,p.r*0.7,p.r*0.7);
+    grad.addColorStop(0,p.col.light); grad.addColorStop(0.55,p.col.base); grad.addColorStop(1,p.col.dark);
+    g.globalAlpha=0.94; g.fillStyle=grad; pathShape(g,p.kind,p.r); g.fill();
+    g.globalAlpha=0.5; g.lineWidth=Math.max(1,p.r*0.05); g.strokeStyle=p.col.dark; g.stroke();
+    g.globalAlpha=0.45; g.strokeStyle=p.col.dark; g.beginPath();
+    if (p.kind==='leaf'){ g.moveTo(0,-p.r*0.9); g.lineTo(0,p.r*0.9); }
+    else if (p.kind==='butterfly'){ g.moveTo(0,-p.r*0.5); g.lineTo(0,p.r*0.55); }
+    else if (p.kind==='gem'){ for(let i=0;i<6;i++){ const a=-Math.PI/2+i/6*Math.PI*2; g.moveTo(0,0); g.lineTo(Math.cos(a)*p.r,Math.sin(a)*p.r*0.9);} }
+    g.stroke(); g.restore();
+  }
+
+  function drawScene() {
+    sctx.setTransform(1,0,0,1,0,0);
+    sctx.clearRect(0,0,scene.width,scene.height);
+    sctx.save(); sctx.translate(R,R);
+    const bg = sctx.createRadialGradient(0,0,0,0,0,R);
+    bg.addColorStop(0,'#fbfbff'); bg.addColorStop(0.7,'#e9e9f2'); bg.addColorStop(1,'#cdcddb');
+    sctx.fillStyle=bg; sctx.beginPath(); sctx.arc(0,0,R,0,Math.PI*2); sctx.fill();
+    sctx.strokeStyle='rgba(90,90,120,0.10)'; sctx.lineWidth=1; sctx.beginPath();
+    const stripes=140;
+    for (let i=0;i<stripes;i++){ const a=i/stripes*Math.PI*2; sctx.moveTo(0,0); sctx.lineTo(Math.cos(a)*R,Math.sin(a)*R); }
+    sctx.stroke();
+    const order = particles.slice().sort((a,b)=>a.r-b.r);
+    for (const p of order) drawPiece(sctx,p);
+    sctx.restore();
+  }
+
+  // ---------- WebGL: składanie symetrii + szkło (refrakcja, aberracja, bloom) ----------
+  const VERT = `attribute vec2 aPos; varying vec2 vUv;
+    void main(){ vUv = aPos*0.5+0.5; gl_Position = vec4(aPos,0.,1.); }`;
+  const FRAG = `precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D uTex;
+    uniform vec2 uRes; uniform float uR; uniform float uTheta; uniform float uHw;
+    uniform float uLight; uniform vec2 uLightDir; uniform float uTime;
+    vec3 samp(float r, vec2 dir){ vec2 st = vec2(0.5)+0.5*r*dir; st.y=1.0-st.y; return texture2D(uTex, st).rgb; }
+    void main(){
+      vec2 frag = vUv*uRes;
+      vec2 p = (frag - vec2(uR)) / uR;
+      float r = length(p);
+      if (r > 1.0) { gl_FragColor = vec4(0.02,0.02,0.05,1.0); return; }
+      float a = atan(p.y, p.x) - uTheta;
+      float w = 2.0*uHw;
+      a += uHw; a = mod(a, 2.0*w); if (a > w) a = 2.0*w - a; a -= uHw;
+      vec2 dir = vec2(cos(a), sin(a));
+      float ripple = 0.006*sin(r*38.0 + uTime*1.2);         // falowanie szkła
+      float ca = 0.006*(0.4+uLight);                        // dyspersja (aberracja)
+      vec3 col;
+      col.r = samp(clamp(r*(1.0+ca)+ripple,0.0,1.0), dir).r;
+      col.g = samp(clamp(r+ripple,0.0,1.0), dir).g;
+      col.b = samp(clamp(r*(1.0-ca)-ripple,0.0,1.0), dir).b;
+      float lum = dot(col, vec3(0.299,0.587,0.114));
+      col += col * smoothstep(0.6,1.0,lum) * (0.3+0.5*uLight);     // pseudo-bloom
+      float sh = pow(max(0.0, dot(normalize(p+1e-4), uLightDir)),2.0) * (0.2+0.6*uLight) * (1.0-r);
+      col += sh;                                             // sheen w stronę światła
+      col *= (0.66 + 0.55*uLight);                           // jasność od światła
+      col *= smoothstep(1.0, 0.55, r);                       // winieta tubusu
+      gl_FragColor = vec4(col, 1.0);
+    }`;
+
+  let gl=null, glTex=null, glU=null, useGL=false;
+  function initGL() {
+    try {
+      gl = view.getContext('webgl', {antialias:true, preserveDrawingBuffer:true})
+        || view.getContext('experimental-webgl', {preserveDrawingBuffer:true});
+      if (!gl) return false;
+      const sh = (t,src)=>{ const s=gl.createShader(t); gl.shaderSource(s,src); gl.compileShader(s);
+        if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+      const prog = gl.createProgram();
+      gl.attachShader(prog, sh(gl.VERTEX_SHADER,VERT));
+      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER,FRAG));
+      gl.linkProgram(prog);
+      if(!gl.getProgramParameter(prog,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      gl.useProgram(prog);
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+      const loc = gl.getAttribLocation(prog,'aPos');
+      gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+      glTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, glTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      glU = {
+        uTex:gl.getUniformLocation(prog,'uTex'), uRes:gl.getUniformLocation(prog,'uRes'),
+        uR:gl.getUniformLocation(prog,'uR'), uTheta:gl.getUniformLocation(prog,'uTheta'),
+        uHw:gl.getUniformLocation(prog,'uHw'), uLight:gl.getUniformLocation(prog,'uLight'),
+        uLightDir:gl.getUniformLocation(prog,'uLightDir'), uTime:gl.getUniformLocation(prog,'uTime'),
+      };
+      return true;
+    } catch(e) { console.warn('WebGL init failed, fallback 2D:', e.message); gl=null; return false; }
+  }
+
+  function renderGL() {
+    gl.viewport(0,0,view.width,view.height);
+    gl.bindTexture(gl.TEXTURE_2D, glTex);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,scene);
+    gl.uniform1i(glU.uTex,0);
+    gl.uniform2f(glU.uRes, view.width, view.height);
+    gl.uniform1f(glU.uR, R);
+    gl.uniform1f(glU.uTheta, state.theta);
+    gl.uniform1f(glU.uHw, halfWedge());
+    gl.uniform1f(glU.uLight, Math.max(0, Math.min(1.2, state.lightI*state.flicker)));
+    const lm = Math.hypot(state.lx,state.ly)||1;
+    gl.uniform2f(glU.uLightDir, state.lx/lm, state.ly/lm);
+    gl.uniform1f(glU.uTime, state.time);
+    gl.drawArrays(gl.TRIANGLES,0,3);
+  }
+
+  // ---------- Fallback 2D (gdy brak WebGL) ----------
+  function render2D() {
+    ctx2d.setTransform(1,0,0,1,0,0);
+    ctx2d.clearRect(0,0,view.width,view.height);
+    ctx2d.save(); ctx2d.translate(R,R); ctx2d.rotate(state.theta);
+    const wedge = Math.PI*2/state.segments;
+    for (let i=0;i<state.segments;i++){
+      ctx2d.save(); ctx2d.rotate(i*wedge); if(i%2===1) ctx2d.scale(1,-1);
+      ctx2d.beginPath(); ctx2d.moveTo(0,0); ctx2d.arc(0,0,R,-wedge/2,wedge/2); ctx2d.closePath(); ctx2d.clip();
+      ctx2d.drawImage(scene,-R,-R); ctx2d.restore();
+    }
+    ctx2d.restore();
+    const lx=R+state.lx*R*0.55, ly=R+state.ly*R*0.55;
+    const sg=ctx2d.createRadialGradient(lx,ly,R*0.05,R,R,R*1.1);
+    sg.addColorStop(0,`rgba(255,255,255,${0.15+0.3*state.lightI*state.flicker})`); sg.addColorStop(1,'rgba(255,255,255,0)');
+    ctx2d.save(); ctx2d.globalCompositeOperation='soft-light'; ctx2d.fillStyle=sg;
+    ctx2d.beginPath(); ctx2d.arc(R,R,R,0,Math.PI*2); ctx2d.fill(); ctx2d.restore();
+    const vg=ctx2d.createRadialGradient(R,R,R*0.62,R,R,R);
+    vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.6)');
+    ctx2d.fillStyle=vg; ctx2d.beginPath(); ctx2d.arc(R,R,R,0,Math.PI*2); ctx2d.fill();
   }
 
   // ---------- Rozmiar ----------
   function resize() {
     const cssSize = Math.min(window.innerWidth, window.innerHeight);
-    const px = Math.round(cssSize * state.dpr);
-    view.width = px; view.height = px;
-    scene.width = px; scene.height = px;
-    R = px / 2;
-    if (particles.length === 0) makeParticles();
+    const px = Math.round(cssSize*state.dpr);
+    view.width=px; view.height=px; scene.width=px; scene.height=px; R=px/2;
+    if (particles.length===0) makeParticles();
   }
   window.addEventListener('resize', resize);
-
-  // ---------- Fizyka ----------
-  const GRAV = 1100, FRICTION = 0.99, SPIN_FRICTION = 0.965, ANG_FRICTION = 0.985;
-
-  function step(dt) {
-    // grawitacja w układzie obróconej komory
-    const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
-    const gX = (state.gx*c - state.gy*s) * GRAV;
-    const gY = (state.gx*s + state.gy*c) * GRAV;
-    const w = state.omega;
-
-    for (const p of particles) {
-      p.vx += gX*dt; p.vy += gY*dt;
-      // siły pozorne od wirowania (odśrodkowa + Coriolis)
-      p.vx += (w*w*p.x + 2*w*p.vy) * dt;
-      p.vy += (w*w*p.y - 2*w*p.vx) * dt;
-      p.vx *= FRICTION; p.vy *= FRICTION;
-      p.x += p.vx*dt; p.y += p.vy*dt;
-      p.rot += p.vrot*dt; p.vrot *= ANG_FRICTION;
-    }
-
-    // kolizje między szkiełkami (kule ograniczające) — tworzą wzór
-    for (let i = 0; i < particles.length; i++) {
-      for (let j = i+1; j < particles.length; j++) {
-        const a = particles[i], b = particles[j];
-        let dx = b.x-a.x, dy = b.y-a.y;
-        let d = Math.hypot(dx,dy);
-        const min = a.r + b.r;
-        if (d > 0 && d < min) {
-          const nx = dx/d, ny = dy/d, overlap = min-d, tot = a.m+b.m;
-          a.x -= nx*overlap*(b.m/tot); a.y -= ny*overlap*(b.m/tot);
-          b.x += nx*overlap*(a.m/tot); b.y += ny*overlap*(a.m/tot);
-          const vn = (b.vx-a.vx)*nx + (b.vy-a.vy)*ny;
-          if (vn < 0) {
-            const e = Math.min(a.e, b.e);
-            const imp = -(1+e)*vn/tot;
-            a.vx -= imp*b.m*nx; a.vy -= imp*b.m*ny;
-            b.vx += imp*a.m*nx; b.vy += imp*a.m*ny;
-            a.vrot += (Math.random()-.5)*0.5; b.vrot += (Math.random()-.5)*0.5;
-          }
-        }
-      }
-    }
-
-    // ściany komory: lustra (kliny) + obudowa + otwór w środku
-    const hw = halfWedge();
-    for (const p of particles) {
-      let ang = Math.atan2(p.y, p.x);
-      if (ang > hw)      { [p.x,p.y]=reflect(p.x,p.y,hw);  [p.vx,p.vy]=reflect(p.vx,p.vy,hw); }
-      else if (ang < -hw){ [p.x,p.y]=reflect(p.x,p.y,-hw); [p.vx,p.vy]=reflect(p.vx,p.vy,-hw); }
-
-      const dist = Math.hypot(p.x,p.y) || 1e-6;
-      const nx = p.x/dist, ny = p.y/dist;
-      const outer = R - p.r, inner = R_IN*R + p.r;
-      if (dist > outer) {
-        p.x = nx*outer; p.y = ny*outer;
-        const vn = p.vx*nx + p.vy*ny;
-        p.vx -= (1+p.e)*vn*nx; p.vy -= (1+p.e)*vn*ny;
-      } else if (dist < inner) {
-        p.x = nx*inner; p.y = ny*inner;
-        const vn = p.vx*nx + p.vy*ny;
-        p.vx -= (1+p.e)*vn*nx; p.vy -= (1+p.e)*vn*ny;
-      }
-    }
-
-    state.theta += state.omega*dt;
-    state.omega *= SPIN_FRICTION;
-    // światło płynnie podąża za przechyłem (przeciwnie do grawitacji)
-    state.lx += (-state.gx - state.lx)*0.08;
-    state.ly += (-state.gy - state.ly)*0.08;
-  }
-
-  // ---------- Kształty szkiełek ----------
-  function pathShape(g, kind, r) {
-    g.beginPath();
-    if (kind[0] === 'p') {                    // wielokąt foremny p3..p6
-      const n = +kind.slice(1);
-      for (let i = 0; i < n; i++) {
-        const a = -Math.PI/2 + i/n*Math.PI*2;
-        const x = Math.cos(a)*r, y = Math.sin(a)*r;
-        i ? g.lineTo(x,y) : g.moveTo(x,y);
-      }
-      g.closePath();
-    } else if (kind === 'diamond') {          // romb
-      g.moveTo(0,-r); g.lineTo(r*0.62,0); g.lineTo(0,r); g.lineTo(-r*0.62,0); g.closePath();
-    } else if (kind === 'leaf') {             // listek
-      g.moveTo(0,-r); g.quadraticCurveTo(r*0.75,0, 0,r); g.quadraticCurveTo(-r*0.75,0, 0,-r); g.closePath();
-    } else if (kind === 'gem') {              // klejnot (sześciokąt)
-      for (let i = 0; i < 6; i++) {
-        const a = -Math.PI/2 + i/6*Math.PI*2;
-        const x = Math.cos(a)*r, y = Math.sin(a)*r*0.9;
-        i ? g.lineTo(x,y) : g.moveTo(x,y);
-      }
-      g.closePath();
-    } else if (kind === 'butterfly') {        // motylek (4 skrzydła)
-      g.ellipse(-r*0.45,-r*0.20, r*0.5, r*0.62, -0.5, 0, Math.PI*2);
-      g.ellipse( r*0.45,-r*0.20, r*0.5, r*0.62,  0.5, 0, Math.PI*2);
-      g.ellipse(-r*0.34, r*0.34, r*0.38, r*0.44, 0.6, 0, Math.PI*2);
-      g.ellipse( r*0.34, r*0.34, r*0.38, r*0.44,-0.6, 0, Math.PI*2);
-    }
-  }
-
-  function drawPiece(g, p) {
-    g.save();
-    g.translate(p.x, p.y);
-    g.rotate(p.rot);
-    // szklane wypełnienie z gradientem światła
-    const grad = g.createLinearGradient(-p.r*0.7,-p.r*0.7, p.r*0.7,p.r*0.7);
-    grad.addColorStop(0, p.col.light);
-    grad.addColorStop(0.55, p.col.base);
-    grad.addColorStop(1, p.col.dark);
-    g.globalAlpha = 0.92;
-    g.fillStyle = grad;
-    pathShape(g, p.kind, p.r);
-    g.fill();
-    // ciemny kontur -> sztywna krawędź szkiełka
-    g.globalAlpha = 0.5;
-    g.lineWidth = Math.max(1, p.r*0.05);
-    g.strokeStyle = p.col.dark;
-    g.stroke();
-    // detale (żyłka listka / korpus motyla / fasety klejnotu)
-    g.globalAlpha = 0.45;
-    g.strokeStyle = p.col.dark;
-    g.beginPath();
-    if (p.kind === 'leaf') {
-      g.moveTo(0,-p.r*0.9); g.lineTo(0,p.r*0.9);
-    } else if (p.kind === 'butterfly') {
-      g.moveTo(0,-p.r*0.5); g.lineTo(0,p.r*0.55);
-    } else if (p.kind === 'gem') {
-      for (let i = 0; i < 6; i++) {
-        const a = -Math.PI/2 + i/6*Math.PI*2;
-        g.moveTo(0,0); g.lineTo(Math.cos(a)*p.r, Math.sin(a)*p.r*0.9);
-      }
-    }
-    g.stroke();
-    g.restore();
-  }
-
-  // ---------- Rysowanie komory (tło prążkowane + szkiełka) ----------
-  function drawScene() {
-    sctx.setTransform(1,0,0,1,0,0);
-    sctx.clearRect(0,0,scene.width,scene.height);
-    sctx.save();
-    sctx.translate(R,R);
-
-    // podświetlone, mleczne tło
-    const bg = sctx.createRadialGradient(0,0,0, 0,0,R);
-    bg.addColorStop(0,'#fbfbff'); bg.addColorStop(0.7,'#e9e9f2'); bg.addColorStop(1,'#cdcddb');
-    sctx.fillStyle = bg;
-    sctx.beginPath(); sctx.arc(0,0,R,0,Math.PI*2); sctx.fill();
-
-    // prążki: cienkie linie promieniste (jak w prawdziwym kalejdoskopie)
-    sctx.strokeStyle = 'rgba(90,90,120,0.10)';
-    sctx.lineWidth = 1;
-    sctx.beginPath();
-    const stripes = 140;
-    for (let i = 0; i < stripes; i++) {
-      const a = i/stripes*Math.PI*2;
-      sctx.moveTo(0,0); sctx.lineTo(Math.cos(a)*R, Math.sin(a)*R);
-    }
-    sctx.stroke();
-
-    // szkiełka (sztywne, nieprzezroczyste) — kolejność wg głębi (r rosnąco)
-    const order = particles.slice().sort((a,b)=>a.r-b.r);
-    for (const p of order) drawPiece(sctx, p);
-
-    sctx.restore();
-  }
-
-  // ---------- Kompozycja: klin + lustra ----------
-  function render() {
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.clearRect(0,0,view.width,view.height);
-    ctx.save();
-    ctx.translate(R,R);
-    ctx.rotate(state.theta);
-    const wedge = Math.PI*2 / state.segments;
-    for (let i = 0; i < state.segments; i++) {
-      ctx.save();
-      ctx.rotate(i*wedge);
-      if (i % 2 === 1) ctx.scale(1,-1);   // lustrzane odbicie co drugi klin
-      ctx.beginPath();
-      ctx.moveTo(0,0);
-      ctx.arc(0,0,R,-wedge/2,wedge/2);
-      ctx.closePath();
-      ctx.clip();
-      ctx.drawImage(scene,-R,-R);
-      ctx.restore();
-    }
-    ctx.restore();
-
-    // sheen: rozświetlenie podążające za światłem/przechyłem (iluzja wpadającego światła)
-    const lx = R + state.lx*R*0.55, ly = R + state.ly*R*0.55;
-    const sg = ctx.createRadialGradient(lx,ly,R*0.05, R,R,R*1.1);
-    sg.addColorStop(0,'rgba(255,255,255,0.28)');
-    sg.addColorStop(0.5,'rgba(255,255,255,0.05)');
-    sg.addColorStop(1,'rgba(255,255,255,0)');
-    ctx.save();
-    ctx.globalCompositeOperation = 'soft-light';
-    ctx.fillStyle = sg;
-    ctx.beginPath(); ctx.arc(R,R,R,0,Math.PI*2); ctx.fill();
-    ctx.restore();
-
-    // winieta -> krawędź tubusu
-    const vg = ctx.createRadialGradient(R,R,R*0.62, R,R,R);
-    vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.6)');
-    ctx.fillStyle = vg;
-    ctx.beginPath(); ctx.arc(R,R,R,0,Math.PI*2); ctx.fill();
-  }
 
   // ---------- Pętla ----------
   let last = performance.now();
   function loop(now) {
-    let dt = (now-last)/1000; last = now;
-    if (dt > 0.05) dt = 0.05;
-    step(dt); drawScene(); render();
+    let dt=(now-last)/1000; last=now; if(dt>0.05) dt=0.05;
+    step(dt); drawScene();
+    if (useGL) renderGL(); else render2D();
     requestAnimationFrame(loop);
   }
 
-  // ---------- Sensory ----------
+  // ---------- Czujnik światła z kamery (A) ----------
+  const cam = document.getElementById('cam');
+  const lightCanvas = document.createElement('canvas'); lightCanvas.width=24; lightCanvas.height=24;
+  const lctx = lightCanvas.getContext('2d', {willReadFrequently:true});
+  let camStream=null, lightTimer=null;
+  async function toggleLight(btn) {
+    if (camStream) {
+      camStream.getTracks().forEach(t=>t.stop()); camStream=null;
+      clearInterval(lightTimer); lightTimer=null;
+      state.lightI = 0.45; btn.classList.remove('on'); showToast('Światło: domyślne');
+      return;
+    }
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'environment'}, audio:false });
+      cam.srcObject = camStream; await cam.play();
+      btn.classList.add('on'); showToast('Światło z kamery — przesuń telefon do światła');
+      lightTimer = setInterval(()=>{
+        if (!cam.videoWidth) return;
+        lctx.drawImage(cam,0,0,24,24);
+        const d = lctx.getImageData(0,0,24,24).data;
+        let sum=0; for (let i=0;i<d.length;i+=4) sum += 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+        const lum = sum/(d.length/4)/255;              // 0..1
+        const target = Math.max(0, Math.min(1, (lum-0.08)*1.6));
+        state.lightI += (target - state.lightI)*0.25;
+      }, 120);
+    } catch(e) {
+      showToast('Brak dostępu do kamery (wymaga HTTPS i zgody)');
+    }
+  }
+
+  // ---------- Sensory ruchu ----------
   let lastShake = 0;
   function onMotion(e) {
     state.hasMotion = true;
     const g = e.accelerationIncludingGravity;
     if (g && g.x != null) {
-      let gx = -g.x, gy = g.y;
-      const mag = Math.hypot(gx,gy) || 1;
-      state.gx += ((gx/mag) - state.gx)*0.15;
-      state.gy += ((gy/mag) - state.gy)*0.15;
+      let gx=-g.x, gy=g.y; const mag=Math.hypot(gx,gy)||1;
+      state.gx += ((gx/mag)-state.gx)*0.15; state.gy += ((gy/mag)-state.gy)*0.15;
     }
     const a = e.acceleration;
     if (a && a.x != null) {
-      const m = Math.hypot(a.x, a.y, a.z||0), t = performance.now();
-      if (m > 16 && t-lastShake > 300) { lastShake = t; scatter(m); }
+      const m=Math.hypot(a.x,a.y,a.z||0), t=performance.now();
+      if (m>16 && t-lastShake>300){ lastShake=t; scatter(m); }
     }
   }
-
-  function scatter(force = 20) {
-    const k = Math.min(force,40)*13;
-    for (const p of particles) {
-      p.vx += (Math.random()-.5)*k;
-      p.vy += (Math.random()-.5)*k;
-      p.vrot += (Math.random()-.5)*4;
-    }
+  function scatter(force=20) {
+    const k=Math.min(force,40)*14;
+    for (const p of particles){ p.vx+=(Math.random()-.5)*k; p.vy+=(Math.random()-.5)*k; p.vrot+=(Math.random()-.5)*4; }
     state.omega += (Math.random()-.5)*2.5;
     if (navigator.vibrate) navigator.vibrate(30);
   }
 
   // ---------- Dotyk: kręcenie palcem ----------
-  let dragging = false, lastAngle = 0, lastT = 0;
-  function pointerAngle(cx, cy) {
-    const r = view.getBoundingClientRect();
-    return Math.atan2(cy - (r.top+r.height/2), cx - (r.left+r.width/2));
-  }
+  let dragging=false, lastAngle=0, lastT=0;
+  const pointerAngle=(cx,cy)=>{ const r=view.getBoundingClientRect(); return Math.atan2(cy-(r.top+r.height/2), cx-(r.left+r.width/2)); };
   function onDown(x,y){ dragging=true; lastAngle=pointerAngle(x,y); lastT=performance.now(); state.omega*=0.3; }
-  function onMove(x,y){
-    if (!dragging) return;
-    const a = pointerAngle(x,y);
-    let d = a-lastAngle;
-    while (d>Math.PI) d-=Math.PI*2; while (d<-Math.PI) d+=Math.PI*2;
-    const now = performance.now(), dt = Math.max((now-lastT)/1000,0.001);
-    state.theta += d; state.omega = d/dt; lastAngle=a; lastT=now;
-  }
+  function onMove(x,y){ if(!dragging) return; const a=pointerAngle(x,y); let d=a-lastAngle;
+    while(d>Math.PI)d-=Math.PI*2; while(d<-Math.PI)d+=Math.PI*2;
+    const now=performance.now(), dt=Math.max((now-lastT)/1000,0.001);
+    state.theta+=d; state.omega=d/dt; lastAngle=a; lastT=now; }
   function onUp(){ dragging=false; }
-
-  view.addEventListener('touchstart', e=>{const t=e.touches[0]; onDown(t.clientX,t.clientY);}, {passive:true});
-  view.addEventListener('touchmove',  e=>{const t=e.touches[0]; onMove(t.clientX,t.clientY);}, {passive:true});
+  view.addEventListener('touchstart', e=>{const t=e.touches[0]; onDown(t.clientX,t.clientY);},{passive:true});
+  view.addEventListener('touchmove',  e=>{const t=e.touches[0]; onMove(t.clientX,t.clientY);},{passive:true});
   view.addEventListener('touchend', onUp, {passive:true});
   view.addEventListener('mousedown', e=>onDown(e.clientX,e.clientY));
   window.addEventListener('mousemove', e=>onMove(e.clientX,e.clientY));
   window.addEventListener('mouseup', onUp);
-
-  // Desktop bez żyroskopu: przechył symulujemy strzałkami; spacja = wstrząs.
   window.addEventListener('keydown', e=>{
-    const st = 0.25;
-    if (e.key==='ArrowLeft'){ const a=Math.atan2(state.gy,state.gx)-st; state.gx=Math.cos(a); state.gy=Math.sin(a); }
-    if (e.key==='ArrowRight'){ const a=Math.atan2(state.gy,state.gx)+st; state.gx=Math.cos(a); state.gy=Math.sin(a); }
-    if (e.key==='ArrowUp'){ state.gx=0; state.gy=1; }   // reset: w dół
-    if (e.key===' '){ e.preventDefault(); scatter(30); }
+    const st=0.25;
+    if(e.key==='ArrowLeft'){ const a=Math.atan2(state.gy,state.gx)-st; state.gx=Math.cos(a); state.gy=Math.sin(a); }
+    if(e.key==='ArrowRight'){ const a=Math.atan2(state.gy,state.gx)+st; state.gx=Math.cos(a); state.gy=Math.sin(a); }
+    if(e.key==='ArrowUp'){ state.gx=0; state.gy=1; }
+    if(e.key===' '){ e.preventDefault(); scatter(30); }
   });
 
   // ---------- UI ----------
-  const hudSeg = document.getElementById('hud-seg');
-  const hudSet = document.getElementById('hud-set');
-  const hudSensor = document.getElementById('hud-sensor');
-
+  const hudSeg=document.getElementById('hud-seg'), hudSet=document.getElementById('hud-set'), hudSensor=document.getElementById('hud-sensor');
   document.getElementById('btn-segments').addEventListener('click', ()=>{
-    const opts = [6, 8];
-    state.segments = opts[(opts.indexOf(state.segments)+1) % opts.length];
-    hudSeg.textContent = 'Symetria: ' + state.segments;
-    const hw = halfWedge();
-    for (const p of particles) {
-      const a = Math.atan2(p.y,p.x);
-      if (a>hw || a<-hw) {
-        const rad = Math.hypot(p.x,p.y);
-        const na = Math.max(-hw, Math.min(hw,a))*0.9;
-        p.x = Math.cos(na)*rad; p.y = Math.sin(na)*rad; p.vx*=0.3; p.vy*=0.3;
-      }
-    }
+    const opts=[6,8]; state.segments=opts[(opts.indexOf(state.segments)+1)%opts.length];
+    hudSeg.textContent='Symetria: '+state.segments;
+    for (const p of particles) clampToChamber(p);
   });
-
   document.getElementById('btn-set').addEventListener('click', ()=>{
-    state.pieceSet = (state.pieceSet+1) % PIECE_SETS.length;
-    hudSet.textContent = 'Szkiełka: ' + PIECE_SETS[state.pieceSet].name;
-    makeParticles();
+    state.pieceSet=(state.pieceSet+1)%PIECE_SETS.length;
+    hudSet.textContent='Szkiełka: '+PIECE_SETS[state.pieceSet].name; makeParticles();
   });
-
+  document.getElementById('btn-light').addEventListener('click', function(){ toggleLight(this); });
   document.getElementById('btn-scatter').addEventListener('click', ()=>scatter(30));
-
   document.getElementById('btn-palette').addEventListener('click', ()=>{
-    state.palette = (state.palette+1) % PALETTES.length;
-    const cols = PALETTES[state.palette];
-    particles.forEach((p,i)=>{ p.hex = cols[i%cols.length]; p.col = colorsFor(p.hex); });
+    state.palette=(state.palette+1)%PALETTES.length; const cols=PALETTES[state.palette];
+    particles.forEach((p,i)=>{ p.hex=cols[i%cols.length]; p.col=colorsFor(p.hex); });
   });
 
   // ---------- Zdjęcie ----------
-  const flash = document.getElementById('flash');
-  const toast = document.getElementById('toast');
-  function showToast(msg){ toast.textContent=msg; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),1800); }
-  function doFlash(){
-    flash.style.transition='none'; flash.style.opacity='0.9';
+  const flash=document.getElementById('flash'), toast=document.getElementById('toast');
+  function showToast(msg){ toast.textContent=msg; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),2000); }
+  function doFlash(){ flash.style.transition='none'; flash.style.opacity='0.9';
     requestAnimationFrame(()=>{ flash.style.transition='opacity .4s'; flash.style.opacity='0'; });
-    if (navigator.vibrate) navigator.vibrate(15);
-  }
+    if(navigator.vibrate) navigator.vibrate(15); }
   document.getElementById('btn-shot').addEventListener('click', async ()=>{
     doFlash();
     const blob = await new Promise(res=>view.toBlob(res,'image/png'));
-    if (!blob) { showToast('Nie udało się zapisać'); return; }
-    const fname = `kalejdoskop-${Date.now()}.png`;
-    const file = new File([blob], fname, {type:'image/png'});
-    if (navigator.canShare && navigator.canShare({files:[file]})) {
-      try { await navigator.share({files:[file], title:'Mój kalejdoskop'}); return; }
-      catch(_) {}
+    if(!blob){ showToast('Nie udało się zapisać'); return; }
+    const fname=`kalejdoskop-${Date.now()}.png`, file=new File([blob],fname,{type:'image/png'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      try{ await navigator.share({files:[file], title:'Mój kalejdoskop'}); return; }catch(_){}
     }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = fname; a.click();
-    setTimeout(()=>URL.revokeObjectURL(url), 1000);
-    showToast('Zapisano: ' + fname);
+    const url=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=url; a.download=fname; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+    showToast('Zapisano: '+fname);
   });
 
-  // ---------- Start / zgoda na sensory ----------
-  const gate = document.getElementById('gate');
+  // ---------- Start ----------
+  const gate=document.getElementById('gate');
   document.getElementById('gate-start').addEventListener('click', async ()=>{
-    let granted = false;
-    try {
-      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        granted = (await DeviceMotionEvent.requestPermission()) === 'granted';
-      } else { granted = true; }
-    } catch(_) { granted = false; }
-    if (granted) { window.addEventListener('devicemotion', onMotion); hudSensor.textContent = 'Sensory: aktywne'; }
-    else { hudSensor.textContent = 'Sensory: brak (użyj strzałek/palca)'; }
-    resize();
+    let granted=false;
+    try{
+      if(typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function')
+        granted=(await DeviceMotionEvent.requestPermission())==='granted';
+      else granted=true;
+    }catch(_){ granted=false; }
+    if(granted){ window.addEventListener('devicemotion', onMotion); hudSensor.textContent='Sensory: aktywne'; }
+    else hudSensor.textContent='Sensory: brak (strzałki/palec)';
+    hudSensor.textContent += useGL ? ' · WebGL' : ' · 2D';
     gate.classList.add('hidden');
   });
 
+  // boot: najpierw próbujemy WebGL na canvasie view; dopiero jak się nie uda,
+  // bierzemy z niego kontekst 2D (to samo płótno nie da obu naraz).
   resize();
+  useGL = initGL();
+  if (!useGL) ctx2d = view.getContext('2d');
   requestAnimationFrame(loop);
 })();
 </script>
