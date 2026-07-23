@@ -82,6 +82,34 @@
   #bar button.primary { background: linear-gradient(135deg,#7c5cff,#ff5ca8); }
   #bar button.on { background: linear-gradient(135deg,#ffd15c,#ff8a5c); color: #241a00; }
   #gate-start { padding: 14px 28px; border-radius: 16px; font-size: 16px; font-weight: 600; }
+  /* Menu u góry + blokada rodzica */
+  #btn-menu {
+    position: fixed; top: calc(env(safe-area-inset-top, 8px) + 4px); right: 12px; z-index: 9;
+    width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; padding: 0;
+  }
+  #btn-menu svg { width: 22px; height: 22px; }
+  #btn-menu.locked::after {
+    content: ''; position: absolute; right: -1px; top: -1px; width: 13px; height: 13px;
+    border-radius: 50%; background: #ff5c6a; box-shadow: 0 0 0 2px #0a0a12;
+  }
+  #menu {
+    position: fixed; top: calc(env(safe-area-inset-top, 8px) + 54px); right: 12px; z-index: 9;
+    width: 236px; padding: 8px; border-radius: 14px;
+    background: rgba(18,18,28,.96); border: 1px solid rgba(255,255,255,.12);
+    backdrop-filter: blur(10px); box-shadow: 0 12px 34px rgba(0,0,0,.55);
+  }
+  .menu-title { font-size: 12px; opacity: .6; padding: 4px 8px 6px; }
+  .menu-item {
+    width: 100%; display: flex; align-items: center; gap: 10px;
+    padding: 11px 10px; border-radius: 10px; background: transparent; color: #fff;
+    font-size: 14px; text-align: left;
+  }
+  .menu-item svg { width: 20px; height: 20px; flex: 0 0 auto; }
+  .menu-item:active { background: rgba(255,255,255,.10); }
+  .menu-item.on { color: #ffd15c; }
+  .menu-item:disabled { opacity: .38; }
+  .menu-note { font-size: 11px; opacity: .6; padding: 8px; line-height: 1.4; }
+  .menu-note b { color: #fff; opacity: .9; }
   #gate {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: radial-gradient(circle at 50% 40%, #171730, #08080f);
@@ -125,10 +153,6 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
         <path d="M12 3v18M4.5 7.5l15 9M19.5 7.5l-15 9"/></svg>
     </button>
-    <button id="btn-light" aria-label="Światło z kamery" title="Światło z kamery">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-        <circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
-    </button>
     <button id="btn-bulb" aria-label="Kolor światła" title="Kolor światła">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.3 1 2.5h6c0-1.2.3-1.8 1-2.5A6 6 0 0 0 12 3z"/></svg>
@@ -137,10 +161,29 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.3 6.3l2.1 2.1M15.6 15.6l2.1 2.1M17.7 6.3l-2.1 2.1M8.4 15.6l-2.1 2.1"/><circle cx="12" cy="12" r="2.2"/></svg>
     </button>
-    <button id="btn-shot" class="primary" aria-label="Zrób zdjęcie" title="Zrób zdjęcie">
+  </div>
+
+  <!-- Menu u góry (kamera + zdjęcie schowane; blokada rodzica) -->
+  <button id="btn-menu" class="topbtn" aria-label="Menu / ustawienia" title="Menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.2a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 4.6 14H4.4a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 6 7.3l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 11 4.6h.1A1.6 1.6 0 0 0 12 3.1a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 18 4.6l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.6 1.6 0 0 0 19.4 9v.1a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.6 1z"/></svg>
+  </button>
+  <div id="menu" class="hidden">
+    <div class="menu-title">Ustawienia</div>
+    <button id="mi-light" class="menu-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+      <span>Światło z kamery</span>
+    </button>
+    <button id="mi-shot" class="menu-item">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
         <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.2"/></svg>
+      <span>Zrób zdjęcie / udostępnij</span>
     </button>
+    <div id="lock-row" class="menu-note">
+      🔒 <b id="lock-state">Odblokowane</b><br>
+      Przytrzymaj ⚙️ przez 1,5 s, aby zablokować/odblokować kamerę i zdjęcia (kontrola rodzica).
+    </div>
   </div>
   <video id="cam" playsinline muted style="position:fixed;width:2px;height:2px;opacity:0;pointer-events:none;left:-10px;top:-10px"></video>
 
@@ -581,7 +624,6 @@
     state.pieceSet=(state.pieceSet+1)%PIECE_SETS.length;
     hudSet.textContent='Szkiełka: '+PIECE_SETS[state.pieceSet].name; makeParticles();
   });
-  document.getElementById('btn-light').addEventListener('click', function(){ toggleLight(this); });
   document.getElementById('btn-scatter').addEventListener('click', ()=>scatter(30));
   const btnBulb = document.getElementById('btn-bulb');
   function applyLightColor() {
@@ -602,7 +644,8 @@
   function doFlash(){ flash.style.transition='none'; flash.style.opacity='0.9';
     requestAnimationFrame(()=>{ flash.style.transition='opacity .4s'; flash.style.opacity='0'; });
     if(navigator.vibrate) navigator.vibrate(15); }
-  document.getElementById('btn-shot').addEventListener('click', async ()=>{
+  async function capture(){
+    if (state.locked) { showToast('Zablokowane przez rodzica 🔒'); return; }
     doFlash();
     const blob = await new Promise(res=>view.toBlob(res,'image/png'));
     if(!blob){ showToast('Nie udało się zapisać'); return; }
@@ -613,6 +656,48 @@
     const url=URL.createObjectURL(blob), a=document.createElement('a');
     a.href=url; a.download=fname; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
     showToast('Zapisano: '+fname);
+  }
+
+  // ---------- Menu u góry + blokada rodzica ----------
+  const menu=document.getElementById('menu'), btnMenu=document.getElementById('btn-menu');
+  const miLight=document.getElementById('mi-light'), miShot=document.getElementById('mi-shot');
+  const lockState=document.getElementById('lock-state');
+
+  miShot.addEventListener('click', ()=>{ capture(); menu.classList.add('hidden'); });
+  miLight.addEventListener('click', ()=>{
+    if (state.locked) { showToast('Zablokowane przez rodzica 🔒'); return; }
+    toggleLight(miLight);
+  });
+
+  function applyLock(){
+    localStorage.setItem('kal.locked', state.locked ? '1' : '0');
+    btnMenu.classList.toggle('locked', state.locked);
+    miShot.disabled = state.locked;
+    miLight.disabled = state.locked;
+    lockState.textContent = state.locked ? 'Zablokowane' : 'Odblokowane';
+    if (state.locked && camStream) toggleLight(miLight); // wyłącz kamerę przy blokadzie
+  }
+  state.locked = localStorage.getItem('kal.locked') === '1';
+  applyLock();
+
+  // krótkie dotknięcie = otwórz/zamknij menu; długie (1,5 s) = blokada rodzica
+  let pressTimer=null, longFired=false;
+  const startPress=()=>{ longFired=false; pressTimer=setTimeout(()=>{
+    longFired=true; state.locked=!state.locked; applyLock();
+    showToast(state.locked ? 'Zablokowano kamerę i zdjęcia 🔒' : 'Odblokowano 🔓');
+    if(navigator.vibrate) navigator.vibrate(40);
+  }, 1500); };
+  const endPress=()=>{ if(pressTimer){ clearTimeout(pressTimer); pressTimer=null; } };
+  btnMenu.addEventListener('click', ()=>{ if(longFired){ longFired=false; return; } menu.classList.toggle('hidden'); });
+  btnMenu.addEventListener('touchstart', startPress, {passive:true});
+  btnMenu.addEventListener('touchend', endPress);
+  btnMenu.addEventListener('mousedown', startPress);
+  btnMenu.addEventListener('mouseup', endPress);
+  btnMenu.addEventListener('mouseleave', endPress);
+  // klik poza menu zamyka
+  document.addEventListener('click', e=>{
+    if(!menu.classList.contains('hidden') && !menu.contains(e.target) && e.target!==btnMenu && !btnMenu.contains(e.target))
+      menu.classList.add('hidden');
   });
 
   // ---------- Start ----------
