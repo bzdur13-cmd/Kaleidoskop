@@ -14,34 +14,58 @@
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     touch-action: none; overscroll-behavior: none;
   }
-  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+  /* okno = canvas + metalowa oprawa; wielkość współdzielona przez zmienną */
+  #stage { position: fixed; inset: 0; }
+  :root { --disc: min(100vw, 100vh); }
+  #stage > * {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: var(--disc); height: var(--disc);
+  }
   canvas#view {
-    width: min(100vw, 100vh); height: min(100vw, 100vh);
-    max-width: 100%; max-height: 100%;
     border-radius: 50%;
-    box-shadow: 0 0 60px rgba(120,120,255,.25), inset 0 0 40px rgba(0,0,0,.6);
-    touch-action: none; display: block;
+    box-shadow: inset 0 0 44px rgba(0,0,0,.7);
+    touch-action: none; display: block; z-index: 1;
+  }
+  /* Cienka, metalowa oprawa okularu (jak przy obiektywie aparatu) — na żywo */
+  #rim {
+    border-radius: 50%; pointer-events: none; z-index: 3;
+    background:
+      radial-gradient(circle closest-side, transparent 90.5%, rgba(255,255,255,.55) 92.5%, transparent 94%),
+      radial-gradient(circle closest-side, transparent 98%, rgba(0,0,0,.55) 99.5%),
+      radial-gradient(circle farthest-side at 33% 27%, rgba(255,255,255,.9), rgba(255,255,255,0) 42%),
+      conic-gradient(from 210deg,
+        #8f959d,#e9edf2,#9aa0a8,#c6cbd2,#71767e,#dadfe4,#868c94,
+        #eef2f6,#7c828a,#b6bbc3,#8f959d,#e9edf2,#9aa0a8);
+    -webkit-mask: radial-gradient(circle closest-side, #0000 91.5%, #000 92.5%);
+            mask: radial-gradient(circle closest-side, #0000 91.5%, #000 92.5%);
+    filter: drop-shadow(0 4px 16px rgba(0,0,0,.5));
   }
   #hud {
     position: fixed; top: env(safe-area-inset-top, 8px); left: 0; right: 0;
     display: flex; justify-content: center; gap: 8px; padding: 8px; flex-wrap: wrap;
-    font-size: 12px; opacity: .75; pointer-events: none;
+    font-size: 12px; opacity: .75; pointer-events: none; z-index: 6;
   }
   #hud span { background: rgba(255,255,255,.08); padding: 4px 10px; border-radius: 999px; }
   #bar {
-    position: fixed; left: 0; right: 0;
+    position: fixed; left: 0; right: 0; z-index: 6;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
     display: flex; justify-content: center; gap: 10px; padding: 0 12px; flex-wrap: wrap;
   }
   button {
-    appearance: none; border: 0; cursor: pointer;
-    background: rgba(255,255,255,.10); color: #fff;
-    padding: 12px 16px; border-radius: 14px; font-size: 14px; font-weight: 600;
-    backdrop-filter: blur(8px); transition: transform .08s, background .15s;
+    appearance: none; border: 0; cursor: pointer; color: #fff;
+    background: rgba(255,255,255,.10); backdrop-filter: blur(8px);
+    transition: transform .08s, background .15s, color .15s, box-shadow .2s;
   }
-  button:active { transform: scale(.94); background: rgba(255,255,255,.2); }
-  button.primary { background: linear-gradient(135deg,#7c5cff,#ff5ca8); }
-  button.on { background: linear-gradient(135deg,#ffd15c,#ff8a5c); color:#241a00; }
+  button:active { transform: scale(.92); }
+  #bar button {
+    width: 54px; height: 54px; padding: 0; border-radius: 50%;
+    display: grid; place-items: center;
+  }
+  #bar button svg { width: 24px; height: 24px; display: block; }
+  #bar button:active { background: rgba(255,255,255,.22); }
+  #bar button.primary { background: linear-gradient(135deg,#7c5cff,#ff5ca8); }
+  #bar button.on { background: linear-gradient(135deg,#ffd15c,#ff8a5c); color: #241a00; }
+  #gate-start { padding: 14px 28px; border-radius: 16px; font-size: 16px; font-weight: 600; }
   #gate {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: radial-gradient(circle at 50% 40%, #171730, #08080f);
@@ -66,6 +90,7 @@
 <body>
   <div id="stage">
     <canvas id="view"></canvas>
+    <div id="rim"></div>
   </div>
 
   <div id="hud">
@@ -75,12 +100,30 @@
   </div>
 
   <div id="bar">
-    <button id="btn-set">Szkiełka</button>
-    <button id="btn-segments">Symetria</button>
-    <button id="btn-light">Światło</button>
-    <button id="btn-scatter">Wstrząśnij</button>
-    <button id="btn-palette">Kolory</button>
-    <button id="btn-shot" class="primary">Zrób zdjęcie</button>
+    <button id="btn-set" aria-label="Rodzaj szkiełek" title="Rodzaj szkiełek">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+        <circle cx="8" cy="8" r="4"/><rect x="12.5" y="12.5" width="8" height="8" rx="1"/><path d="M15 3.5l4 7h-8z"/></svg>
+    </button>
+    <button id="btn-segments" aria-label="Symetria" title="Symetria (osie)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <path d="M12 3v18M4.5 7.5l15 9M19.5 7.5l-15 9"/></svg>
+    </button>
+    <button id="btn-light" aria-label="Światło z kamery" title="Światło z kamery">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+    </button>
+    <button id="btn-bulb" aria-label="Kolor światła" title="Kolor światła">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.3 1 2.5h6c0-1.2.3-1.8 1-2.5A6 6 0 0 0 12 3z"/></svg>
+    </button>
+    <button id="btn-scatter" aria-label="Wstrząśnij" title="Wstrząśnij">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.3 6.3l2.1 2.1M15.6 15.6l2.1 2.1M17.7 6.3l-2.1 2.1M8.4 15.6l-2.1 2.1"/><circle cx="12" cy="12" r="2.2"/></svg>
+    </button>
+    <button id="btn-shot" class="primary" aria-label="Zrób zdjęcie" title="Zrób zdjęcie">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+        <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.2"/></svg>
+    </button>
   </div>
   <video id="cam" playsinline muted style="position:fixed;width:2px;height:2px;opacity:0;pointer-events:none;left:-10px;top:-10px"></video>
 
@@ -115,10 +158,21 @@
     gx: 0, gy: 1, pgx: 0, pgy: 1,   // grawitacja teraz / poprzednio (do mikro-drgań)
     lx: 0, ly: -1,                  // kierunek światła (sheen)
     lightI: 0.45, flicker: 1,       // natężenie i lekkie migotanie światła
+    lightCol: [1,1,1], lightIdx: 0, // kolor światła w okularze
     dpr: Math.min(window.devicePixelRatio || 1, 2),
     palette: 0, pieceSet: 0,
     hasMotion: false, time: 0,
   };
+
+  // Kolory światła w okularze (białe = neutralne); wartości ~<=1 -> barwią i lekko przygaszają kanały.
+  const LIGHT_COLORS = [
+    { name:'Białe',   v:[1,1,1],          css:'#ffffff' },
+    { name:'Ciepłe',  v:[1.0,0.80,0.52],  css:'#ffcf88' },
+    { name:'Różowe',  v:[1.0,0.58,0.82],  css:'#ff95c6' },
+    { name:'Turkus',  v:[0.55,0.9,1.0],   css:'#8fe4ff' },
+    { name:'Zielone', v:[0.66,1.0,0.70],  css:'#a6ffb2' },
+    { name:'Fiolet',  v:[0.80,0.68,1.0],  css:'#c6adff' },
+  ];
 
   const PALETTES = [
     ['#e84393','#6c5ce7','#00b4d8','#2ecc71','#f1c40f','#e67e22'],
@@ -296,7 +350,7 @@
     varying vec2 vUv;
     uniform sampler2D uTex;
     uniform vec2 uRes; uniform float uR; uniform float uTheta; uniform float uHw;
-    uniform float uLight; uniform vec2 uLightDir; uniform float uTime;
+    uniform float uLight; uniform vec2 uLightDir; uniform float uTime; uniform vec3 uLightCol;
     vec3 samp(float r, vec2 dir){ vec2 st = vec2(0.5)+0.5*r*dir; st.y=1.0-st.y; return texture2D(uTex, st).rgb; }
     void main(){
       vec2 frag = vUv*uRes;
@@ -316,9 +370,10 @@
       float lum = dot(col, vec3(0.299,0.587,0.114));
       col += col * smoothstep(0.6,1.0,lum) * (0.3+0.5*uLight);     // pseudo-bloom
       float sh = pow(max(0.0, dot(normalize(p+1e-4), uLightDir)),2.0) * (0.2+0.6*uLight) * (1.0-r);
-      col += sh;                                             // sheen w stronę światła
+      col += sh * uLightCol;                                 // sheen w kolorze światła
       col *= (0.66 + 0.55*uLight);                           // jasność od światła
-      col *= smoothstep(1.0, 0.55, r);                       // winieta tubusu
+      col *= mix(vec3(1.0), uLightCol, 0.55);                // barwa światła w okularze
+      col *= smoothstep(1.0, 0.92, r);                       // cienka winieta tuż pod oprawą
       gl_FragColor = vec4(col, 1.0);
     }`;
 
@@ -353,6 +408,7 @@
         uR:gl.getUniformLocation(prog,'uR'), uTheta:gl.getUniformLocation(prog,'uTheta'),
         uHw:gl.getUniformLocation(prog,'uHw'), uLight:gl.getUniformLocation(prog,'uLight'),
         uLightDir:gl.getUniformLocation(prog,'uLightDir'), uTime:gl.getUniformLocation(prog,'uTime'),
+        uLightCol:gl.getUniformLocation(prog,'uLightCol'),
       };
       return true;
     } catch(e) { console.warn('WebGL init failed, fallback 2D:', e.message); gl=null; return false; }
@@ -371,6 +427,7 @@
     const lm = Math.hypot(state.lx,state.ly)||1;
     gl.uniform2f(glU.uLightDir, state.lx/lm, state.ly/lm);
     gl.uniform1f(glU.uTime, state.time);
+    gl.uniform3f(glU.uLightCol, state.lightCol[0], state.lightCol[1], state.lightCol[2]);
     gl.drawArrays(gl.TRIANGLES,0,3);
   }
 
@@ -391,7 +448,14 @@
     sg.addColorStop(0,`rgba(255,255,255,${0.15+0.3*state.lightI*state.flicker})`); sg.addColorStop(1,'rgba(255,255,255,0)');
     ctx2d.save(); ctx2d.globalCompositeOperation='soft-light'; ctx2d.fillStyle=sg;
     ctx2d.beginPath(); ctx2d.arc(R,R,R,0,Math.PI*2); ctx2d.fill(); ctx2d.restore();
-    const vg=ctx2d.createRadialGradient(R,R,R*0.62,R,R,R);
+    // barwa światła w okularze
+    const lc = state.lightCol;
+    if (lc[0]!==1 || lc[1]!==1 || lc[2]!==1) {
+      ctx2d.save(); ctx2d.globalCompositeOperation='multiply';
+      ctx2d.fillStyle=`rgb(${(lc[0]*255)|0},${(lc[1]*255)|0},${(lc[2]*255)|0})`;
+      ctx2d.globalAlpha=0.55; ctx2d.beginPath(); ctx2d.arc(R,R,R,0,Math.PI*2); ctx2d.fill(); ctx2d.restore();
+    }
+    const vg=ctx2d.createRadialGradient(R,R,R*0.9,R,R,R);
     vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.6)');
     ctx2d.fillStyle=vg; ctx2d.beginPath(); ctx2d.arc(R,R,R,0,Math.PI*2); ctx2d.fill();
   }
@@ -502,9 +566,17 @@
   });
   document.getElementById('btn-light').addEventListener('click', function(){ toggleLight(this); });
   document.getElementById('btn-scatter').addEventListener('click', ()=>scatter(30));
-  document.getElementById('btn-palette').addEventListener('click', ()=>{
-    state.palette=(state.palette+1)%PALETTES.length; const cols=PALETTES[state.palette];
-    particles.forEach((p,i)=>{ p.hex=cols[i%cols.length]; p.col=colorsFor(p.hex); });
+  const btnBulb = document.getElementById('btn-bulb');
+  function applyLightColor() {
+    const lc = LIGHT_COLORS[state.lightIdx];
+    state.lightCol = lc.v.slice();
+    // żaróweczka świeci aktualnym kolorem
+    btnBulb.style.color = lc.css;
+    btnBulb.style.boxShadow = state.lightIdx===0 ? 'none' : `0 0 16px ${lc.css}`;
+  }
+  btnBulb.addEventListener('click', ()=>{
+    state.lightIdx = (state.lightIdx+1) % LIGHT_COLORS.length;
+    applyLightColor(); showToast('Światło: ' + LIGHT_COLORS[state.lightIdx].name);
   });
 
   // ---------- Zdjęcie ----------
