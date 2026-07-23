@@ -262,7 +262,7 @@
     const hw = halfWedge();
     for (let i = 0; i < set.count; i++) {
       const ang = (Math.random()*2-1)*hw*0.75;
-      const rad = (R_IN + Math.sqrt(Math.random())*(0.8-R_IN))*R;
+      const rad = (R_IN + Math.sqrt(Math.random())*(0.82-R_IN))*R;   // wewnątrz widocznej komory
       const r = R*(0.05 + Math.random()*0.07)*set.size;
       const hex = cols[i%cols.length];
       const x = Math.cos(ang)*rad, y = Math.sin(ang)*rad;
@@ -277,30 +277,33 @@
     }
   }
 
-  // ---------- Fizyka: model prędkościowy z odbiciami (ostry ruch luźnych szkiełek) ----------
-  const GRAV = 4300, DAMP = 0.988, ITER = 3, VMAX = 8000, REST_W = 0.55;
+  // ---------- Fizyka: szybki spadek + tarcie -> szkiełka układają się w stos i blokują ----------
+  const GRAV = 5200, DAMP = 0.996, ITER = 5, VMAX = 9000;
+  const REST = 0.14;      // niska sprężystość -> nie odbijają się, tylko lądują
+  const MU_P = 0.32;      // tarcie między szkiełkami (dość, by budować stos; mało, by lawina była ostra)
+  const MU_W = 0.20;      // tarcie o ścianki/lustra
+  const ANG_DAMP = 0.82;  // tarcie obrotowe -> przestają się kręcić
+  const R_OUT = 0.86;     // komora kończy się przed metalowym rantem (nic nie znika pod oprawą)
 
-  // Kolizja ze ścianą-lustrem / obudową: wypchnij z powrotem i odbij prędkość.
-  function wallBounce(p) {
-    const hw = halfWedge(), S = Math.sin(hw), C = Math.cos(hw), e = REST_W;
-    // górna ściana, normalna wewnętrzna (S,-C)
-    const su = p.x*S - p.y*C;
-    if (su < p.r) { p.x += S*(p.r-su); p.y += -C*(p.r-su);
-      const vn = p.vx*S - p.vy*C; if (vn < 0) { p.vx -= (1+e)*vn*S; p.vy -= (1+e)*vn*(-C); } }
-    // dolna ściana, normalna wewnętrzna (S, C)
-    const sl = p.x*S + p.y*C;
-    if (sl < p.r) { p.x += S*(p.r-sl); p.y += C*(p.r-sl);
-      const vn = p.vx*S + p.vy*C; if (vn < 0) { p.vx -= (1+e)*vn*S; p.vy -= (1+e)*vn*C; } }
-    // obudowa (zewnętrzny okrąg)
-    let d = Math.hypot(p.x,p.y) || 1e-6; const outer = R - p.r;
-    if (d > outer) { const nx=p.x/d, ny=p.y/d; p.x=nx*outer; p.y=ny*outer;
-      const vn = p.vx*nx + p.vy*ny; if (vn > 0) { p.vx -= (1+e)*vn*nx; p.vy -= (1+e)*vn*ny; } }
-    // mały otwór w środku
-    d = Math.hypot(p.x,p.y) || 1e-6; const inner = R_IN*R + p.r;
-    if (d < inner) { const nx=p.x/d, ny=p.y/d; p.x=nx*inner; p.y=ny*inner;
-      const vn = p.vx*nx + p.vy*ny; if (vn < 0) { p.vx -= (1+e)*vn*nx; p.vy -= (1+e)*vn*ny; } }
+  // Kontakt ze ścianą o normalnej wewnętrznej (nx,ny): odbij słabo + tarcie styczne.
+  function wallContact(p, nx, ny) {
+    const vn = p.vx*nx + p.vy*ny;
+    if (vn < 0) { p.vx -= (1+REST)*vn*nx; p.vy -= (1+REST)*vn*ny; }
+    const tx = -ny, ty = nx, vt = p.vx*tx + p.vy*ty;   // styczna
+    p.vx -= MU_W*vt*tx; p.vy -= MU_W*vt*ty;
   }
-  const clampToChamber = wallBounce;   // (używane też przy zmianie symetrii)
+  function wallBounce(p) {
+    const hw = halfWedge(), S = Math.sin(hw), C = Math.cos(hw);
+    let su = p.x*S - p.y*C;                    // górna ściana-lustro, normalna (S,-C)
+    if (su < p.r) { p.x += S*(p.r-su); p.y += -C*(p.r-su); wallContact(p, S, -C); }
+    let sl = p.x*S + p.y*C;                    // dolna ściana-lustro, normalna (S, C)
+    if (sl < p.r) { p.x += S*(p.r-sl); p.y += C*(p.r-sl); wallContact(p, S, C); }
+    let d = Math.hypot(p.x,p.y) || 1e-6; const outer = R_OUT*R - p.r;
+    if (d > outer) { const nx=p.x/d, ny=p.y/d; p.x=nx*outer; p.y=ny*outer; wallContact(p, -nx, -ny); }
+    d = Math.hypot(p.x,p.y) || 1e-6; const inner = R_IN*R + p.r;
+    if (d < inner) { const nx=p.x/d, ny=p.y/d; p.x=nx*inner; p.y=ny*inner; wallContact(p, nx, ny); }
+  }
+  const clampToChamber = wallBounce;
 
   function step(dt) {
     const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
@@ -308,12 +311,12 @@
     const gY = (state.gx*s + state.gy*c)*GRAV;
     const w = state.omega;
 
-    // zmiana przechyłu -> lekki plastik z małym luzem drgnie (grawitacja + tarcie)
+    // drgnięcie tylko przy zmianie przechyłu (w spoczynku szkiełka stoją nieruchomo)
     const dTilt = Math.hypot(state.gx-state.pgx, state.gy-state.pgy);
     state.pgx = state.gx; state.pgy = state.gy;
-    const jit = 0.15 + dTilt*40;
+    const jit = dTilt*40;
 
-    // 1) siły + całkowanie prędkości/pozycji
+    // 1) siły + całkowanie; tarcie obrotowe zatrzymuje wirowanie
     for (const p of particles) {
       p.vx += (gX + w*w*p.x + 2*w*p.vy)*dt + (Math.random()-.5)*jit;
       p.vy += (gY + w*w*p.y - 2*w*p.vx)*dt + (Math.random()-.5)*jit;
@@ -321,13 +324,10 @@
       const sp2 = p.vx*p.vx + p.vy*p.vy;
       if (sp2 > VMAX*VMAX) { const k = VMAX/Math.sqrt(sp2); p.vx*=k; p.vy*=k; }
       p.x += p.vx*dt; p.y += p.vy*dt;
-      p.rot += p.vrot*dt;
-      // turlanie: obrót zgodny z ruchem poziomym (~v/r)
-      p.vrot = p.vrot*0.9 + (p.vx/(p.r+8))*0.12;
-      if (p.vrot > 12) p.vrot = 12; else if (p.vrot < -12) p.vrot = -12;
+      p.rot += p.vrot*dt; p.vrot *= ANG_DAMP;
     }
 
-    // 2) kolizje szkiełek: rozdziel + odbij prędkość (sprężyście) — daje ostry ruch
+    // 2) kolizje: rozdziel + niska sprężystość + TARCIE -> budują stos i blokują
     for (let it = 0; it < ITER; it++) {
       for (let i = 0; i < particles.length; i++) {
         const a = particles[i];
@@ -339,12 +339,16 @@
             const nx = dx/d, ny = dy/d, corr = (min-d), tot = a.invM+b.invM;
             a.x -= nx*corr*(a.invM/tot); a.y -= ny*corr*(a.invM/tot);
             b.x += nx*corr*(b.invM/tot); b.y += ny*corr*(b.invM/tot);
-            const rvn = (b.vx-a.vx)*nx + (b.vy-a.vy)*ny;
+            const rvn = (b.vx-a.vx)*nx + (b.vy-a.vy)*ny;      // normalny impuls
             if (rvn < 0) {
               const e = Math.min(a.e, b.e), imp = -(1+e)*rvn/tot;
               a.vx -= imp*a.invM*nx; a.vy -= imp*a.invM*ny;
               b.vx += imp*b.invM*nx; b.vy += imp*b.invM*ny;
             }
+            const tx = -ny, ty = nx;                          // tarcie styczne
+            const vt = (b.vx-a.vx)*tx + (b.vy-a.vy)*ty, jt = -vt*MU_P/tot;
+            a.vx -= jt*a.invM*tx; a.vy -= jt*a.invM*ty;
+            b.vx += jt*b.invM*tx; b.vy += jt*b.invM*ty;
           }
         }
       }
