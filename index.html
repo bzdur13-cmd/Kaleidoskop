@@ -572,13 +572,15 @@
 
   // ---------- Sensory ruchu ----------
   let lastShake = 0, prevAG = null;
+  let dmCount = 0, doCount = 0, lastDM = 0;   // liczniki zdarzeń (diagnostyka)
+
   function onMotion(e) {
-    state.hasMotion = true;
+    dmCount++; lastDM = performance.now(); state.hasMotion = true;
     const g = e.accelerationIncludingGravity;
     if (g && g.x != null) {
       // szybkie podążanie za przechyłem -> szkiełka od razu lecą w stronę grawitacji
       let gx=-g.x, gy=g.y; const mag=Math.hypot(gx,gy)||1;
-      state.gx += ((gx/mag)-state.gx)*0.4; state.gy += ((gy/mag)-state.gy)*0.4;
+      if (mag > 0.1) { state.gx += ((gx/mag)-state.gx)*0.4; state.gy += ((gy/mag)-state.gy)*0.4; }
     }
     // Wstrząs: użyj czystego przyspieszenia jeśli jest; jeśli nie (częste na Androidzie)
     // — policz „jerk" ze zmiany accelerationIncludingGravity między zdarzeniami.
@@ -592,6 +594,20 @@
     }
     const t = performance.now();
     if (shake > 12 && t-lastShake > 220) { lastShake=t; scatter(shake); }
+  }
+
+  // Zapasowa ścieżka: kąty pochylenia (działa na wielu Androidach, gdy devicemotion milczy)
+  function onOrient(e) {
+    doCount++;
+    if (e.beta == null || e.gamma == null) return;
+    // używamy orientacji do grawitacji tylko gdy brak świeżych danych z devicemotion
+    if (performance.now() - lastDM < 800) return;
+    state.hasMotion = true;
+    const rad = Math.PI/180;
+    let gx = Math.sin(e.gamma*rad);   // lewo-prawo
+    let gy = Math.sin(e.beta*rad);    // przód-tył
+    const mag = Math.hypot(gx,gy) || 1;
+    state.gx += ((gx/mag)-state.gx)*0.4; state.gy += ((gy/mag)-state.gy)*0.4;
   }
   function scatter(force=20) {
     // mieszanie jak w pojemniku — mocny, losowy impuls
@@ -712,18 +728,31 @@
 
   // ---------- Start ----------
   const gate=document.getElementById('gate');
-  document.getElementById('gate-start').addEventListener('click', async ()=>{
-    let granted=false;
+  async function reqPerm(Ev){
     try{
-      if(typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function')
-        granted=(await DeviceMotionEvent.requestPermission())==='granted';
-      else granted=true;
-    }catch(_){ granted=false; }
-    if(granted){ window.addEventListener('devicemotion', onMotion); hudSensor.textContent='Sensory: aktywne'; }
-    else hudSensor.textContent='Sensory: brak (strzałki/palec)';
-    hudSensor.textContent += useGL ? ' · WebGL' : ' · 2D';
+      if(typeof Ev!=='undefined' && typeof Ev.requestPermission==='function')
+        return (await Ev.requestPermission())==='granted';
+    }catch(_){ return false; }
+    return true; // Android/desktop — bez pytania
+  }
+  document.getElementById('gate-start').addEventListener('click', async ()=>{
+    const okM = await reqPerm(typeof DeviceMotionEvent!=='undefined' ? DeviceMotionEvent : undefined);
+    const okO = await reqPerm(typeof DeviceOrientationEvent!=='undefined' ? DeviceOrientationEvent : undefined);
+    if(okM) window.addEventListener('devicemotion', onMotion);
+    if(okO) window.addEventListener('deviceorientation', onOrient);
+    startDiag();
     gate.classList.add('hidden');
   });
+
+  // ---------- Diagnostyka czujników (na żywo w pasku u góry) ----------
+  function startDiag(){
+    setInterval(()=>{
+      const gx = state.gx.toFixed(2), gy = state.gy.toFixed(2);
+      let s = `ruch DM:${dmCount} OR:${doCount} · g(${gx},${gy}) · ${useGL?'GL':'2D'}`;
+      if (dmCount===0 && doCount===0) s = '⚠ brak czujnika ruchu — ' + s;
+      hudSensor.textContent = s;
+    }, 400);
+  }
 
   // boot: najpierw próbujemy WebGL na canvasie view; dopiero jak się nie uda,
   // bierzemy z niego kontekst 2D (to samo płótno nie da obu naraz).
