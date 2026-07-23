@@ -210,7 +210,7 @@
   // ---------- Stan ----------
   const state = {
     segments: 6,
-    theta: 0, omega: 0,
+    theta: 0, spin: 0, omega: 0, gAlign: Math.PI/2,  // theta = gAlign(za grawitacją) + spin(palec)
     gx: 0, gy: 1, pgx: 0, pgy: 1,   // grawitacja teraz / poprzednio (do mikro-drgań)
     lx: 0, ly: -1,                  // kierunek światła (sheen)
     lightI: 0.45, flicker: 1,       // natężenie i lekkie migotanie światła
@@ -306,6 +306,14 @@
   const clampToChamber = wallBounce;
 
   function step(dt) {
+    // Obracamy kalejdoskop tak, by grawitacja celowała w środek klina (oś +x) —
+    // wtedy stos siada w ŚRODKU sektora (nie na linii lustra) i widać 6 odbić.
+    // Śledzenie jest POWOLNE: przy szybkim przechyle szkiełka najpierw się zsypują
+    // (kaskada), a po chwili wzór wraca do pełnej symetrii.
+    let ad = Math.atan2(state.gy, state.gx) - state.gAlign;
+    while (ad > Math.PI) ad -= Math.PI*2; while (ad < -Math.PI) ad += Math.PI*2;
+    state.gAlign += ad*0.05;
+    state.theta = state.gAlign + state.spin;
     const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
     const gX = (state.gx*c - state.gy*s)*GRAV;
     const gY = (state.gx*s + state.gy*c)*GRAV;
@@ -355,7 +363,7 @@
       for (const p of particles) wallBounce(p);
     }
 
-    state.theta += state.omega*dt;
+    state.spin += state.omega*dt;   // bezwładność obrotu palcem (theta liczone na górze)
     state.omega *= 0.965;
     state.lx += (-state.gx - state.lx)*0.08;
     state.ly += (-state.gy - state.ly)*0.08;
@@ -634,7 +642,7 @@
   function onMove(x,y){ if(!dragging) return; const a=pointerAngle(x,y); let d=a-lastAngle;
     while(d>Math.PI)d-=Math.PI*2; while(d<-Math.PI)d+=Math.PI*2;
     const now=performance.now(), dt=Math.max((now-lastT)/1000,0.001);
-    state.theta+=d; state.omega=d/dt; lastAngle=a; lastT=now; }
+    state.spin+=d; state.omega=d/dt; lastAngle=a; lastT=now; }
   function onUp(){ dragging=false; }
   view.addEventListener('touchstart', e=>{const t=e.touches[0]; onDown(t.clientX,t.clientY);},{passive:true});
   view.addEventListener('touchmove',  e=>{const t=e.touches[0]; onMove(t.clientX,t.clientY);},{passive:true});
