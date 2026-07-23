@@ -139,7 +139,7 @@
   </div>
 
   <div id="hud">
-    <span id="hud-seg">Symetria: 6</span>
+    <span id="hud-seg">Typ: Toblerone</span>
     <span id="hud-set">Szkiełka: Geometryczne</span>
     <span id="hud-sensor">Sensory: —</span>
   </div>
@@ -149,7 +149,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
         <circle cx="8" cy="8" r="4"/><rect x="12.5" y="12.5" width="8" height="8" rx="1"/><path d="M15 3.5l4 7h-8z"/></svg>
     </button>
-    <button id="btn-segments" aria-label="Symetria" title="Symetria (osie)">
+    <button id="btn-segments" aria-label="Typ kalejdoskopu" title="Typ: Szyba / Toblerone">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
         <path d="M12 3v18M4.5 7.5l15 9M19.5 7.5l-15 9"/></svg>
     </button>
@@ -208,8 +208,9 @@
   const sctx = scene.getContext('2d');
 
   // ---------- Stan ----------
+  const SYM_NAMES = ['Szyba', 'Toblerone'];   // 0 = rozeta (2 lustra), 1 = trójkąt (3 lustra)
   const state = {
-    segments: 6,
+    segments: 6, symType: 1,
     theta: 0, spin: 0, omega: 0, gAlign: Math.PI/2,  // theta = gAlign(za grawitacją) + spin(palec)
     gx: 0, gy: 1, pgx: 0, pgy: 1,   // grawitacja teraz / poprzednio (do mikro-drgań)
     lx: 0, ly: -1,                  // kierunek światła (sheen)
@@ -262,58 +263,89 @@
   const TRI_N = [[0,-1],[0.8660254,0.5],[-0.8660254,0.5]];
   const triApothem = () => TRI_F * R;
 
+  function pushParticle(x, y, set, cols, i, sizeMul) {
+    const r = R*(0.045 + Math.random()*0.05)*set.size*sizeMul;
+    const hex = cols[i%cols.length];
+    particles.push({
+      x, y, px:x, py:y,
+      vx:(Math.random()-.5)*40, vy:(Math.random()-.5)*40,
+      r, m:r*r, invM:1/(r*r), e:set.rest,
+      kind:set.kinds[(Math.random()*set.kinds.length)|0],
+      hex, col:colorsFor(hex),
+      rot:Math.random()*Math.PI*2, vrot:(Math.random()-.5)*1.2,
+    });
+  }
   function makeParticles() {
     particles.length = 0;
     const set = PIECE_SETS[state.pieceSet];
     const cols = PALETTES[state.palette];
-    const a = triApothem();
-    // wierzchołki trójkąta (do losowania pozycji): góra, lewy-dół, prawy-dół
-    const Vx=[0, -1.7320508*a, 1.7320508*a], Vy=[-2*a, a, a];
-    for (let i = 0; i < set.count; i++) {
-      let u=Math.random(), v=Math.random(); if(u+v>1){u=1-u; v=1-v;}
-      const x = (Vx[0] + u*(Vx[1]-Vx[0]) + v*(Vx[2]-Vx[0]))*0.85;
-      const y = (Vy[0] + u*(Vy[1]-Vy[0]) + v*(Vy[2]-Vy[0]))*0.85;
-      const r = R*(0.045 + Math.random()*0.05)*set.size;
-      const hex = cols[i%cols.length];
-      particles.push({
-        x, y, px:x, py:y,
-        vx:(Math.random()-.5)*40, vy:(Math.random()-.5)*40,
-        r, m:r*r, invM:1/(r*r), e:set.rest,
-        kind:set.kinds[(Math.random()*set.kinds.length)|0],
-        hex, col:colorsFor(hex),
-        rot:Math.random()*Math.PI*2, vrot:(Math.random()-.5)*1.2,
-      });
+    if (state.symType === 1) {                    // TOBLERONE: rozłóż w trójkącie
+      const a = triApothem();
+      const Vx=[0, -1.7320508*a, 1.7320508*a], Vy=[-2*a, a, a];
+      for (let i = 0; i < set.count; i++) {
+        let u=Math.random(), v=Math.random(); if(u+v>1){u=1-u; v=1-v;}
+        const x = (Vx[0] + u*(Vx[1]-Vx[0]) + v*(Vx[2]-Vx[0]))*0.85;
+        const y = (Vy[0] + u*(Vy[1]-Vy[0]) + v*(Vy[2]-Vy[0]))*0.85;
+        pushParticle(x, y, set, cols, i, 1.0);
+      }
+    } else {                                       // SZYBA: rozłóż w klinie
+      const hw = halfWedge(), n = Math.max(6, Math.round(set.count*0.6));
+      for (let i = 0; i < n; i++) {
+        const ang = (Math.random()*2-1)*hw*0.8;
+        const rad = (R_IN + Math.sqrt(Math.random())*(0.82-R_IN))*R;
+        pushParticle(Math.cos(ang)*rad, Math.sin(ang)*rad, set, cols, i, 1.7);
+      }
     }
   }
 
-  // ---------- Fizyka: szybki spadek + lekkie tarcie -> stos, bez „syropu" ----------
+  // ---------- Fizyka: szybki spadek + lekkie tarcie (bez „syropu") ----------
   const GRAV = 5200, DAMP = 0.997, ITER = 4, VMAX = 9000;
-  const REST = 0.22;      // trochę odbicia -> żywszy ruch
-  const MU_P = 0.20;      // tarcie między szkiełkami (na tyle, by budować stos)
-  const MU_W = 0.12;      // tarcie o lustra
-  const ANG_DAMP = 0.85;  // tarcie obrotowe -> nie kręcą się w kółko
+  const REST = 0.30;      // odbicie -> żywszy ruch
+  const MU_P = 0.12;      // małe tarcie między szkiełkami
+  const MU_W = 0.07;      // małe tarcie o lustra
+  const ANG_DAMP = 0.86;  // tarcie obrotowe -> nie kręcą się w kółko
 
-  // Odbicie od krawędzi-lustra trójkąta (normalna zewnętrzna n): wepchnij + odbij + tarcie.
+  function bounceEdge(p, nx, ny, lim) {   // wepchnij za krawędź-lustro + odbij + tarcie
+    const s = p.x*nx + p.y*ny;
+    if (s > lim) {
+      p.x -= (s-lim)*nx; p.y -= (s-lim)*ny;
+      const vn = p.vx*nx + p.vy*ny;
+      if (vn > 0) { p.vx -= (1+REST)*vn*nx; p.vy -= (1+REST)*vn*ny; }
+      const tx=-ny, ty=nx, vt=p.vx*tx+p.vy*ty;
+      p.vx -= MU_W*vt*tx; p.vy -= MU_W*vt*ty;
+    }
+  }
   function wallBounce(p) {
-    const a = triApothem();
-    for (let k=0;k<3;k++){
-      const nx=TRI_N[k][0], ny=TRI_N[k][1];
-      const s = p.x*nx + p.y*ny, lim = a - p.r;
-      if (s > lim) {
-        p.x -= (s-lim)*nx; p.y -= (s-lim)*ny;
-        const vn = p.vx*nx + p.vy*ny;                 // wzdłuż normalnej na zewnątrz
-        if (vn > 0) { p.vx -= (1+REST)*vn*nx; p.vy -= (1+REST)*vn*ny; }
-        const tx=-ny, ty=nx, vt=p.vx*tx+p.vy*ty;      // tarcie styczne
-        p.vx -= MU_W*vt*tx; p.vy -= MU_W*vt*ty;
-      }
+    if (state.symType === 1) {               // TOBLERONE: 3 krawędzie trójkąta
+      const a = triApothem();
+      for (let k=0;k<3;k++) bounceEdge(p, TRI_N[k][0], TRI_N[k][1], a - p.r);
+    } else {                                  // SZYBA: 2 lustra klina + obudowa + otwór
+      const hw = halfWedge(), S = Math.sin(hw), C = Math.cos(hw);
+      bounceEdge(p, -S,  C, -p.r);           // górne lustro (normalna zewnętrzna)
+      bounceEdge(p, -S, -C, -p.r);           // dolne lustro
+      let d = Math.hypot(p.x,p.y) || 1e-6;
+      const outer = 0.86*R - p.r;
+      if (d > outer) { const nx=p.x/d, ny=p.y/d; p.x=nx*outer; p.y=ny*outer;
+        const vn=p.vx*nx+p.vy*ny; if(vn>0){ p.vx-=(1+REST)*vn*nx; p.vy-=(1+REST)*vn*ny; } }
+      d = Math.hypot(p.x,p.y) || 1e-6; const inner = R_IN*R + p.r;
+      if (d < inner) { const nx=p.x/d, ny=p.y/d; p.x=nx*inner; p.y=ny*inner;
+        const vn=p.vx*nx+p.vy*ny; if(vn<0){ p.vx-=(1+REST)*vn*nx; p.vy-=(1+REST)*vn*ny; } }
     }
   }
   const clampToChamber = wallBounce;
 
   function step(dt) {
-    // 3 lustra (trójkąt) kafelkują całe koło, więc grawitacja może działać wprost:
-    // szkiełka spadają w dół komory i budują stos; theta = tylko obrót palcem.
-    state.theta = state.spin;
+    if (state.symType === 1) {
+      // TOBLERONE: 3 lustra kafelkują całe koło -> grawitacja wprost, theta = palec.
+      state.theta = state.spin;
+    } else {
+      // SZYBA: obracamy komorę tak, by grawitacja celowała w środek klina -> stos
+      // siada w środku sektora (pełne 6 odbić). Powolne śledzenie = kaskada przy przechyle.
+      let ad = Math.atan2(state.gy, state.gx) - state.gAlign;
+      while (ad > Math.PI) ad -= Math.PI*2; while (ad < -Math.PI) ad += Math.PI*2;
+      state.gAlign += ad*0.08;
+      state.theta = state.gAlign + state.spin;
+    }
     const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
     const gX = (state.gx*c - state.gy*s)*GRAV;
     const gY = (state.gx*s + state.gy*c)*GRAV;
@@ -430,8 +462,9 @@
     varying vec2 vUv;
     uniform sampler2D uTex;
     uniform vec2 uRes; uniform float uR; uniform float uTheta; uniform float uA;
+    uniform float uHw; uniform float uMode;
     uniform float uLight; uniform vec2 uLightDir; uniform float uTime; uniform vec3 uLightCol;
-    // Kafelkowanie trójkątem równobocznym (3 lustra) — składa dowolny punkt do komory.
+    // TOBLERONE: kafelkowanie trójkątem równobocznym (3 lustra).
     vec2 foldTri(vec2 p, float a){
       vec2 nb=vec2(0.0,-1.0), nr=vec2(0.8660254,0.5), nl=vec2(-0.8660254,0.5);
       for(int i=0;i<8;i++){
@@ -450,9 +483,17 @@
       if (r > 1.0) { gl_FragColor = vec4(0.02,0.02,0.05,1.0); return; }
       float ct=cos(-uTheta), st=sin(-uTheta);
       vec2 pr = vec2(p.x*ct - p.y*st, p.x*st + p.y*ct);
-      vec2 fp = foldTri(pr, uA);
-      float ripple = 0.004*sin(r*36.0 + uTime*1.2);          // falowanie szkła
-      float ca = 0.008*(0.4+uLight);                         // aberracja chromatyczna
+      float ripple = 0.004*sin(r*36.0 + uTime*1.2);
+      float ca = 0.008*(0.4+uLight);
+      vec2 fp;
+      if (uMode > 0.5) {                       // TOBLERONE
+        fp = foldTri(pr, uA);
+      } else {                                 // SZYBA: rozeta (2 lustra), próbka biegunowa
+        float a = atan(pr.y, pr.x);
+        float w = 2.0*uHw;
+        a += uHw; a = mod(a, 2.0*w); if (a > w) a = 2.0*w - a; a -= uHw;
+        fp = r * vec2(cos(a), sin(a));
+      }
       vec2 rd = normalize(fp+1e-5)*ca + ripple;
       vec3 col;
       col.r = tex(fp+rd).r;
@@ -500,6 +541,7 @@
         uA:gl.getUniformLocation(prog,'uA'), uLight:gl.getUniformLocation(prog,'uLight'),
         uLightDir:gl.getUniformLocation(prog,'uLightDir'), uTime:gl.getUniformLocation(prog,'uTime'),
         uLightCol:gl.getUniformLocation(prog,'uLightCol'),
+        uHw:gl.getUniformLocation(prog,'uHw'), uMode:gl.getUniformLocation(prog,'uMode'),
       };
       return true;
     } catch(e) { console.warn('WebGL init failed, fallback 2D:', e.message); gl=null; return false; }
@@ -514,6 +556,8 @@
     gl.uniform1f(glU.uR, R);
     gl.uniform1f(glU.uTheta, state.theta);
     gl.uniform1f(glU.uA, TRI_F);
+    gl.uniform1f(glU.uHw, halfWedge());
+    gl.uniform1f(glU.uMode, state.symType);
     gl.uniform1f(glU.uLight, Math.max(0, Math.min(1.2, state.lightI*state.flicker)));
     const lm = Math.hypot(state.lx,state.ly)||1;
     gl.uniform2f(glU.uLightDir, state.lx/lm, state.ly/lm);
@@ -672,9 +716,9 @@
   // ---------- UI ----------
   const hudSeg=document.getElementById('hud-seg'), hudSet=document.getElementById('hud-set'), hudSensor=document.getElementById('hud-sensor');
   document.getElementById('btn-segments').addEventListener('click', ()=>{
-    const opts=[6,8]; state.segments=opts[(opts.indexOf(state.segments)+1)%opts.length];
-    hudSeg.textContent='Symetria: '+state.segments;
-    for (const p of particles) clampToChamber(p);
+    state.symType = (state.symType+1) % SYM_NAMES.length;   // Szyba <-> Toblerone
+    hudSeg.textContent = 'Typ: ' + SYM_NAMES[state.symType];
+    makeParticles();
   });
   document.getElementById('btn-set').addEventListener('click', ()=>{
     state.pieceSet=(state.pieceSet+1)%PIECE_SETS.length;
