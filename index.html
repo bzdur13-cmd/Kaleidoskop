@@ -157,10 +157,6 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.3 1 2.5h6c0-1.2.3-1.8 1-2.5A6 6 0 0 0 12 3z"/></svg>
     </button>
-    <button id="btn-scatter" aria-label="Wstrząśnij" title="Wstrząśnij">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.3 6.3l2.1 2.1M15.6 15.6l2.1 2.1M17.7 6.3l-2.1 2.1M8.4 15.6l-2.1 2.1"/><circle cx="12" cy="12" r="2.2"/></svg>
-    </button>
   </div>
 
   <!-- Menu u góry (kamera + zdjęcie schowane; blokada rodzica) -->
@@ -624,7 +620,6 @@
     state.pieceSet=(state.pieceSet+1)%PIECE_SETS.length;
     hudSet.textContent='Szkiełka: '+PIECE_SETS[state.pieceSet].name; makeParticles();
   });
-  document.getElementById('btn-scatter').addEventListener('click', ()=>scatter(30));
   const btnBulb = document.getElementById('btn-bulb');
   function applyLightColor() {
     const lc = LIGHT_COLORS[state.lightIdx];
