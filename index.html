@@ -238,10 +238,10 @@
   ];
 
   const PIECE_SETS = [
-    { name:'Geometryczne', kinds:['p3','p4','p5','p6','diamond'], count:18, size:0.62, rest:0.5 },
-    { name:'Listki',       kinds:['leaf'],                         count:15, size:0.85, rest:0.45 },
-    { name:'Motylki',      kinds:['butterfly'],                    count:13, size:0.9,  rest:0.46 },
-    { name:'Klejnoty',     kinds:['gem','diamond'],                count:20, size:0.55, rest:0.55 },
+    { name:'Geometryczne', kinds:['p3','p4','p5','p6','diamond'], count:34, size:0.5,  rest:0.5 },
+    { name:'Listki',       kinds:['leaf'],                         count:26, size:0.7,  rest:0.45 },
+    { name:'Motylki',      kinds:['butterfly'],                    count:22, size:0.75, rest:0.46 },
+    { name:'Klejnoty',     kinds:['gem','diamond'],                count:38, size:0.42, rest:0.55 },
   ];
 
   const hx = c => { c=c.replace('#',''); return [parseInt(c.slice(0,2),16),parseInt(c.slice(2,4),16),parseInt(c.slice(4,6),16)]; };
@@ -255,20 +255,29 @@
   const R_IN = 0.03;
   const halfWedge = () => Math.PI / state.segments;
 
+  // ---------- Komora = trójkąt równoboczny (3 lustra, jak graniastosłup) ----------
+  // Trzy krawędzie to lustra; shader kafelkuje ten trójkąt po całym kole (gęsty,
+  // ciągły wzór bez przerw). Normalne zewnętrzne krawędzi (dół, prawa-góra, lewa-góra):
+  const TRI_F = 0.17;                       // apotema trójkąta jako ułamek R (mniejszy = gęściej)
+  const TRI_N = [[0,-1],[0.8660254,0.5],[-0.8660254,0.5]];
+  const triApothem = () => TRI_F * R;
+
   function makeParticles() {
     particles.length = 0;
     const set = PIECE_SETS[state.pieceSet];
     const cols = PALETTES[state.palette];
-    const hw = halfWedge();
+    const a = triApothem();
+    // wierzchołki trójkąta (do losowania pozycji): góra, lewy-dół, prawy-dół
+    const Vx=[0, -1.7320508*a, 1.7320508*a], Vy=[-2*a, a, a];
     for (let i = 0; i < set.count; i++) {
-      const ang = (Math.random()*2-1)*hw*0.75;
-      const rad = (R_IN + Math.sqrt(Math.random())*(0.82-R_IN))*R;   // wewnątrz widocznej komory
-      const r = R*(0.05 + Math.random()*0.07)*set.size;
+      let u=Math.random(), v=Math.random(); if(u+v>1){u=1-u; v=1-v;}
+      const x = (Vx[0] + u*(Vx[1]-Vx[0]) + v*(Vx[2]-Vx[0]))*0.85;
+      const y = (Vy[0] + u*(Vy[1]-Vy[0]) + v*(Vy[2]-Vy[0]))*0.85;
+      const r = R*(0.045 + Math.random()*0.05)*set.size;
       const hex = cols[i%cols.length];
-      const x = Math.cos(ang)*rad, y = Math.sin(ang)*rad;
       particles.push({
         x, y, px:x, py:y,
-        vx:(Math.random()-.5)*30, vy:(Math.random()-.5)*30,
+        vx:(Math.random()-.5)*40, vy:(Math.random()-.5)*40,
         r, m:r*r, invM:1/(r*r), e:set.rest,
         kind:set.kinds[(Math.random()*set.kinds.length)|0],
         hex, col:colorsFor(hex),
@@ -277,43 +286,34 @@
     }
   }
 
-  // ---------- Fizyka: szybki spadek + tarcie -> szkiełka układają się w stos i blokują ----------
-  const GRAV = 5200, DAMP = 0.996, ITER = 5, VMAX = 9000;
-  const REST = 0.14;      // niska sprężystość -> nie odbijają się, tylko lądują
-  const MU_P = 0.32;      // tarcie między szkiełkami (dość, by budować stos; mało, by lawina była ostra)
-  const MU_W = 0.20;      // tarcie o ścianki/lustra
-  const ANG_DAMP = 0.82;  // tarcie obrotowe -> przestają się kręcić
-  const R_OUT = 0.86;     // komora kończy się przed metalowym rantem (nic nie znika pod oprawą)
+  // ---------- Fizyka: szybki spadek + lekkie tarcie -> stos, bez „syropu" ----------
+  const GRAV = 5200, DAMP = 0.997, ITER = 4, VMAX = 9000;
+  const REST = 0.22;      // trochę odbicia -> żywszy ruch
+  const MU_P = 0.20;      // tarcie między szkiełkami (na tyle, by budować stos)
+  const MU_W = 0.12;      // tarcie o lustra
+  const ANG_DAMP = 0.85;  // tarcie obrotowe -> nie kręcą się w kółko
 
-  // Kontakt ze ścianą o normalnej wewnętrznej (nx,ny): odbij słabo + tarcie styczne.
-  function wallContact(p, nx, ny) {
-    const vn = p.vx*nx + p.vy*ny;
-    if (vn < 0) { p.vx -= (1+REST)*vn*nx; p.vy -= (1+REST)*vn*ny; }
-    const tx = -ny, ty = nx, vt = p.vx*tx + p.vy*ty;   // styczna
-    p.vx -= MU_W*vt*tx; p.vy -= MU_W*vt*ty;
-  }
+  // Odbicie od krawędzi-lustra trójkąta (normalna zewnętrzna n): wepchnij + odbij + tarcie.
   function wallBounce(p) {
-    const hw = halfWedge(), S = Math.sin(hw), C = Math.cos(hw);
-    let su = p.x*S - p.y*C;                    // górna ściana-lustro, normalna (S,-C)
-    if (su < p.r) { p.x += S*(p.r-su); p.y += -C*(p.r-su); wallContact(p, S, -C); }
-    let sl = p.x*S + p.y*C;                    // dolna ściana-lustro, normalna (S, C)
-    if (sl < p.r) { p.x += S*(p.r-sl); p.y += C*(p.r-sl); wallContact(p, S, C); }
-    let d = Math.hypot(p.x,p.y) || 1e-6; const outer = R_OUT*R - p.r;
-    if (d > outer) { const nx=p.x/d, ny=p.y/d; p.x=nx*outer; p.y=ny*outer; wallContact(p, -nx, -ny); }
-    d = Math.hypot(p.x,p.y) || 1e-6; const inner = R_IN*R + p.r;
-    if (d < inner) { const nx=p.x/d, ny=p.y/d; p.x=nx*inner; p.y=ny*inner; wallContact(p, nx, ny); }
+    const a = triApothem();
+    for (let k=0;k<3;k++){
+      const nx=TRI_N[k][0], ny=TRI_N[k][1];
+      const s = p.x*nx + p.y*ny, lim = a - p.r;
+      if (s > lim) {
+        p.x -= (s-lim)*nx; p.y -= (s-lim)*ny;
+        const vn = p.vx*nx + p.vy*ny;                 // wzdłuż normalnej na zewnątrz
+        if (vn > 0) { p.vx -= (1+REST)*vn*nx; p.vy -= (1+REST)*vn*ny; }
+        const tx=-ny, ty=nx, vt=p.vx*tx+p.vy*ty;      // tarcie styczne
+        p.vx -= MU_W*vt*tx; p.vy -= MU_W*vt*ty;
+      }
+    }
   }
   const clampToChamber = wallBounce;
 
   function step(dt) {
-    // Obracamy kalejdoskop tak, by grawitacja celowała w środek klina (oś +x) —
-    // wtedy stos siada w ŚRODKU sektora (nie na linii lustra) i widać 6 odbić.
-    // Śledzenie jest POWOLNE: przy szybkim przechyle szkiełka najpierw się zsypują
-    // (kaskada), a po chwili wzór wraca do pełnej symetrii.
-    let ad = Math.atan2(state.gy, state.gx) - state.gAlign;
-    while (ad > Math.PI) ad -= Math.PI*2; while (ad < -Math.PI) ad += Math.PI*2;
-    state.gAlign += ad*0.05;
-    state.theta = state.gAlign + state.spin;
+    // 3 lustra (trójkąt) kafelkują całe koło, więc grawitacja może działać wprost:
+    // szkiełka spadają w dół komory i budują stos; theta = tylko obrót palcem.
+    state.theta = state.spin;
     const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
     const gX = (state.gx*c - state.gy*s)*GRAV;
     const gY = (state.gx*s + state.gy*c)*GRAV;
@@ -429,24 +429,35 @@
   const FRAG = `precision highp float;
     varying vec2 vUv;
     uniform sampler2D uTex;
-    uniform vec2 uRes; uniform float uR; uniform float uTheta; uniform float uHw;
+    uniform vec2 uRes; uniform float uR; uniform float uTheta; uniform float uA;
     uniform float uLight; uniform vec2 uLightDir; uniform float uTime; uniform vec3 uLightCol;
-    vec3 samp(float r, vec2 dir){ vec2 st = vec2(0.5)+0.5*r*dir; st.y=1.0-st.y; return texture2D(uTex, st).rgb; }
+    // Kafelkowanie trójkątem równobocznym (3 lustra) — składa dowolny punkt do komory.
+    vec2 foldTri(vec2 p, float a){
+      vec2 nb=vec2(0.0,-1.0), nr=vec2(0.8660254,0.5), nl=vec2(-0.8660254,0.5);
+      for(int i=0;i<8;i++){
+        float d;
+        d=dot(p,nb)-a; if(d>0.0) p-=2.0*d*nb;
+        d=dot(p,nr)-a; if(d>0.0) p-=2.0*d*nr;
+        d=dot(p,nl)-a; if(d>0.0) p-=2.0*d*nl;
+      }
+      return p;
+    }
+    vec3 tex(vec2 fp){ vec2 uv=vec2(0.5)+0.5*fp; uv.y=1.0-uv.y; return texture2D(uTex, uv).rgb; }
     void main(){
       vec2 frag = vUv*uRes;
       vec2 p = (frag - vec2(uR)) / uR;
       float r = length(p);
       if (r > 1.0) { gl_FragColor = vec4(0.02,0.02,0.05,1.0); return; }
-      float a = atan(p.y, p.x) - uTheta;
-      float w = 2.0*uHw;
-      a += uHw; a = mod(a, 2.0*w); if (a > w) a = 2.0*w - a; a -= uHw;
-      vec2 dir = vec2(cos(a), sin(a));
-      float ripple = 0.006*sin(r*38.0 + uTime*1.2);         // falowanie szkła
-      float ca = 0.006*(0.4+uLight);                        // dyspersja (aberracja)
+      float ct=cos(-uTheta), st=sin(-uTheta);
+      vec2 pr = vec2(p.x*ct - p.y*st, p.x*st + p.y*ct);
+      vec2 fp = foldTri(pr, uA);
+      float ripple = 0.004*sin(r*36.0 + uTime*1.2);          // falowanie szkła
+      float ca = 0.008*(0.4+uLight);                         // aberracja chromatyczna
+      vec2 rd = normalize(fp+1e-5)*ca + ripple;
       vec3 col;
-      col.r = samp(clamp(r*(1.0+ca)+ripple,0.0,1.0), dir).r;
-      col.g = samp(clamp(r+ripple,0.0,1.0), dir).g;
-      col.b = samp(clamp(r*(1.0-ca)-ripple,0.0,1.0), dir).b;
+      col.r = tex(fp+rd).r;
+      col.g = tex(fp).g;
+      col.b = tex(fp-rd).b;
       float lum = dot(col, vec3(0.299,0.587,0.114));
       col += col * smoothstep(0.6,1.0,lum) * (0.3+0.5*uLight);     // pseudo-bloom
       float sh = pow(max(0.0, dot(normalize(p+1e-4), uLightDir)),2.0) * (0.2+0.6*uLight) * (1.0-r);
@@ -486,7 +497,7 @@
       glU = {
         uTex:gl.getUniformLocation(prog,'uTex'), uRes:gl.getUniformLocation(prog,'uRes'),
         uR:gl.getUniformLocation(prog,'uR'), uTheta:gl.getUniformLocation(prog,'uTheta'),
-        uHw:gl.getUniformLocation(prog,'uHw'), uLight:gl.getUniformLocation(prog,'uLight'),
+        uA:gl.getUniformLocation(prog,'uA'), uLight:gl.getUniformLocation(prog,'uLight'),
         uLightDir:gl.getUniformLocation(prog,'uLightDir'), uTime:gl.getUniformLocation(prog,'uTime'),
         uLightCol:gl.getUniformLocation(prog,'uLightCol'),
       };
@@ -502,7 +513,7 @@
     gl.uniform2f(glU.uRes, view.width, view.height);
     gl.uniform1f(glU.uR, R);
     gl.uniform1f(glU.uTheta, state.theta);
-    gl.uniform1f(glU.uHw, halfWedge());
+    gl.uniform1f(glU.uA, TRI_F);
     gl.uniform1f(glU.uLight, Math.max(0, Math.min(1.2, state.lightI*state.flicker)));
     const lm = Math.hypot(state.lx,state.ly)||1;
     gl.uniform2f(glU.uLightDir, state.lx/lm, state.ly/lm);
