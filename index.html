@@ -40,6 +40,22 @@
             mask: radial-gradient(circle closest-side, #0000 91.5%, #000 92.5%);
     filter: drop-shadow(0 4px 16px rgba(0,0,0,.5));
   }
+  /* Ruchome refleksy światła sunące po metalu (na żywo) */
+  #rim-glint {
+    border-radius: 50%; pointer-events: none; z-index: 4; mix-blend-mode: screen;
+    background: conic-gradient(from 0deg,
+      rgba(255,255,255,0) 0deg, rgba(255,255,255,.9) 26deg, rgba(255,255,255,0) 56deg,
+      rgba(255,255,255,0) 168deg, rgba(255,255,255,.55) 190deg, rgba(255,255,255,0) 218deg,
+      rgba(255,255,255,0) 360deg);
+    -webkit-mask: radial-gradient(circle closest-side, #0000 91.5%, #000 92.5%);
+            mask: radial-gradient(circle closest-side, #0000 91.5%, #000 92.5%);
+    animation: rimspin 7s linear infinite;
+  }
+  @keyframes rimspin {
+    from { transform: translate(-50%, -50%) rotate(0deg); }
+    to   { transform: translate(-50%, -50%) rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: reduce) { #rim-glint { animation: none; } }
   #hud {
     position: fixed; top: env(safe-area-inset-top, 8px); left: 0; right: 0;
     display: flex; justify-content: center; gap: 8px; padding: 8px; flex-wrap: wrap;
@@ -91,6 +107,7 @@
   <div id="stage">
     <canvas id="view"></canvas>
     <div id="rim"></div>
+    <div id="rim-glint"></div>
   </div>
 
   <div id="hud">
