@@ -238,10 +238,10 @@
   ];
 
   const PIECE_SETS = [
-    { name:'Geometryczne', kinds:['p3','p4','p5','p6','diamond'], count:16, size:1.0,  rest:0.35 },
-    { name:'Listki',       kinds:['leaf'],                         count:14, size:1.3,  rest:0.28 },
-    { name:'Motylki',      kinds:['butterfly'],                    count:12, size:1.35, rest:0.32 },
-    { name:'Klejnoty',     kinds:['gem','diamond'],                count:18, size:0.85, rest:0.42 },
+    { name:'Geometryczne', kinds:['p3','p4','p5','p6','diamond'], count:11, size:1.0,  rest:0.4 },
+    { name:'Listki',       kinds:['leaf'],                         count:10, size:1.3,  rest:0.35 },
+    { name:'Motylki',      kinds:['butterfly'],                    count:9,  size:1.35, rest:0.38 },
+    { name:'Klejnoty',     kinds:['gem','diamond'],                count:13, size:0.85, rest:0.45 },
   ];
 
   const hx = c => { c=c.replace('#',''); return [parseInt(c.slice(0,2),16),parseInt(c.slice(2,4),16),parseInt(c.slice(4,6),16)]; };
@@ -277,8 +277,8 @@
     }
   }
 
-  // ---------- Fizyka: solver pozycyjny (PBD) -> stabilne stertki ----------
-  const GRAV = 1700, VDAMP = 0.994, ITER = 6;
+  // ---------- Fizyka: solver pozycyjny (PBD) -> szybkie opadanie + stertki ----------
+  const GRAV = 3200, VDAMP = 0.999, ITER = 6, VMAX = 6500;
 
   function clampToChamber(p) {
     const hw = halfWedge(), S = Math.sin(hw), C = Math.cos(hw);
@@ -332,11 +332,17 @@
       for (const p of particles) clampToChamber(p);
     }
 
-    // prędkość z ruchu pozycyjnego (PBD) + drzemka gdy prawie stoi
+    // prędkość z ruchu pozycyjnego (PBD) + turlanie + limit prędkości
     for (const p of particles) {
-      p.vx = (p.x-p.px)/dt * 0.985;
-      p.vy = (p.y-p.py)/dt * 0.985;
-      if (p.vx*p.vx + p.vy*p.vy < 3) { p.vx *= 0.5; p.vy *= 0.5; }
+      p.vx = (p.x-p.px)/dt * 0.995;
+      p.vy = (p.y-p.py)/dt * 0.995;
+      const sp2 = p.vx*p.vx + p.vy*p.vy;
+      if (sp2 > VMAX*VMAX) { const k = VMAX/Math.sqrt(sp2); p.vx*=k; p.vy*=k; }
+      else if (sp2 < 0.5) { p.vx *= 0.8; p.vy *= 0.8; }   // tylko naprawdę stojące „przysypiają”
+      // turlanie: szkiełko obraca się zgodnie z ruchem poziomym (~v/r)
+      let target = p.vx/(p.r+8);
+      p.vrot = p.vrot*0.9 + target*0.12;
+      if (p.vrot > 12) p.vrot = 12; else if (p.vrot < -12) p.vrot = -12;
     }
 
     state.theta += state.omega*dt;
@@ -565,24 +571,33 @@
   }
 
   // ---------- Sensory ruchu ----------
-  let lastShake = 0;
+  let lastShake = 0, prevAG = null;
   function onMotion(e) {
     state.hasMotion = true;
     const g = e.accelerationIncludingGravity;
     if (g && g.x != null) {
+      // szybkie podążanie za przechyłem -> szkiełka od razu lecą w stronę grawitacji
       let gx=-g.x, gy=g.y; const mag=Math.hypot(gx,gy)||1;
-      state.gx += ((gx/mag)-state.gx)*0.15; state.gy += ((gy/mag)-state.gy)*0.15;
+      state.gx += ((gx/mag)-state.gx)*0.4; state.gy += ((gy/mag)-state.gy)*0.4;
     }
+    // Wstrząs: użyj czystego przyspieszenia jeśli jest; jeśli nie (częste na Androidzie)
+    // — policz „jerk" ze zmiany accelerationIncludingGravity między zdarzeniami.
+    let shake = 0;
     const a = e.acceleration;
     if (a && a.x != null) {
-      const m=Math.hypot(a.x,a.y,a.z||0), t=performance.now();
-      if (m>16 && t-lastShake>300){ lastShake=t; scatter(m); }
+      shake = Math.hypot(a.x, a.y, a.z||0);
+    } else if (g && g.x != null) {
+      if (prevAG) shake = Math.hypot(g.x-prevAG.x, g.y-prevAG.y, (g.z||0)-prevAG.z) * 1.4;
+      prevAG = { x:g.x, y:g.y, z:g.z||0 };
     }
+    const t = performance.now();
+    if (shake > 12 && t-lastShake > 220) { lastShake=t; scatter(shake); }
   }
   function scatter(force=20) {
-    const k=Math.min(force,40)*14;
-    for (const p of particles){ p.vx+=(Math.random()-.5)*k; p.vy+=(Math.random()-.5)*k; p.vrot+=(Math.random()-.5)*4; }
-    state.omega += (Math.random()-.5)*2.5;
+    // mieszanie jak w pojemniku — mocny, losowy impuls
+    const k = Math.min(force,45)*26;
+    for (const p of particles){ p.vx+=(Math.random()-.5)*k; p.vy+=(Math.random()-.5)*k; p.vrot+=(Math.random()-.5)*8; }
+    state.omega += (Math.random()-.5)*3;
     if (navigator.vibrate) navigator.vibrate(30);
   }
 
@@ -716,6 +731,8 @@
   useGL = initGL();
   if (!useGL) ctx2d = view.getContext('2d');
   requestAnimationFrame(loop);
+
+  window.__kal = { state, particles };  // hak diagnostyczny (podgląd fizyki)
 })();
 </script>
 </body>
