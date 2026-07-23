@@ -199,6 +199,7 @@
     </div>
   </div>
 
+<script src="matter.min.js"></script>
 <script>
 "use strict";
 (() => {
@@ -250,157 +251,103 @@
   const rgb = c => `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`;
   const colorsFor = hex => { const b=hx(hex); return { base:rgb(b), light:rgb(mix(b,[255,255,255],0.6)), dark:rgb(mix(b,[0,0,0],0.45)) }; };
 
-  // ---------- Szkiełka ----------
-  const particles = [];
+  // ---------- Szkiełka jako bryły sztywne (silnik Matter.js) ----------
+  // Prawdziwa fizyka Newtona: wielokąty z rogami, moment obrotowy, tarcie,
+  // zderzenia i układanie się w stos. Grawitacja z czujnika telefonu.
+  const M = window.Matter;
+  const engine = M.Engine.create();
+  engine.enableSleeping = false;              // zawsze reagują na przechył
+  engine.gravity.scale = 0.011;               // siła grawitacji (szybki spadek)
+  const world = engine.world;
+
+  const pieces = [];        // { body, kind, col, r, hex }
+  let pieceBodies = [], walls = [];
   let R = 300;
   const R_IN = 0.03;
   const halfWedge = () => Math.PI / state.segments;
 
-  // ---------- Komora = trójkąt równoboczny (3 lustra, jak graniastosłup) ----------
-  // Trzy krawędzie to lustra; shader kafelkuje ten trójkąt po całym kole (gęsty,
-  // ciągły wzór bez przerw). Normalne zewnętrzne krawędzi (dół, prawa-góra, lewa-góra):
-  const TRI_F = 0.17;                       // apotema trójkąta jako ułamek R (mniejszy = gęściej)
+  const TRI_F = 0.17;                         // apotema trójkąta jako ułamek R
   const TRI_N = [[0,-1],[0.8660254,0.5],[-0.8660254,0.5]];
   const triApothem = () => TRI_F * R;
 
-  function pushParticle(x, y, set, cols, i, sizeMul) {
-    const r = R*(0.045 + Math.random()*0.05)*set.size*sizeMul;
-    const hex = cols[i%cols.length];
-    particles.push({
-      x, y, px:x, py:y,
-      vx:(Math.random()-.5)*40, vy:(Math.random()-.5)*40,
-      r, m:r*r, invM:1/(r*r), e:set.rest,
-      kind:set.kinds[(Math.random()*set.kinds.length)|0],
-      hex, col:colorsFor(hex),
-      rot:Math.random()*Math.PI*2, vrot:(Math.random()-.5)*1.2,
-    });
+  // Wierzchołki komory (świat, y w dół), spójne z foldem w shaderze.
+  function chamberVerts() {
+    if (state.symType === 1) {                // TOBLERONE: trójkąt (apex w dół)
+      const a = triApothem();
+      return [ {x:0,y:2*a}, {x:-1.7320508*a,y:-a}, {x:1.7320508*a,y:-a} ];
+    }
+    const hw = halfWedge(), L = 0.82*R;       // SZYBA: klin (wierzchołek w środku, otwarty w +x)
+    return [ {x:0,y:0}, {x:L*Math.cos(hw), y:L*Math.sin(hw)}, {x:L*Math.cos(hw), y:-L*Math.sin(hw)} ];
   }
+
+  function buildChamber() {
+    if (walls.length) M.Composite.remove(world, walls);
+    walls = [];
+    const V = chamberVerts();
+    const cx=(V[0].x+V[1].x+V[2].x)/3, cy=(V[0].y+V[1].y+V[2].y)/3;
+    const th = Math.max(30, R*0.6);           // grube ściany, nic nie ucieka
+    for (let i=0;i<3;i++){
+      const a=V[i], b=V[(i+1)%3];
+      const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+      const len=Math.hypot(b.x-a.x,b.y-a.y), ang=Math.atan2(b.y-a.y,b.x-a.x);
+      let ox=mx-cx, oy=my-cy; const on=Math.hypot(ox,oy)||1; ox/=on; oy/=on;   // na zewnątrz
+      walls.push(M.Bodies.rectangle(mx+ox*th/2, my+oy*th/2, len+th*2, th,
+        { isStatic:true, angle:ang, friction:0.4, restitution:0.1 }));
+    }
+    M.Composite.add(world, walls);
+  }
+
+  function makeBody(x, y, kind, r) {
+    const o = { friction:0.45, frictionStatic:0.7, restitution:0.12, frictionAir:0.002, density:0.001 };
+    if (kind[0]==='p') return M.Bodies.polygon(x, y, +kind.slice(1), r, o);
+    if (kind==='diamond') return M.Bodies.polygon(x, y, 4, r, o);
+    return M.Bodies.polygon(x, y, 6, r, o);   // gem/leaf/butterfly: przybliżenie bryły
+  }
+
   function makeParticles() {
-    particles.length = 0;
-    const set = PIECE_SETS[state.pieceSet];
-    const cols = PALETTES[state.palette];
-    if (state.symType === 1) {                    // TOBLERONE: rozłóż w trójkącie
-      const a = triApothem();
-      const Vx=[0, -1.7320508*a, 1.7320508*a], Vy=[-2*a, a, a];
-      for (let i = 0; i < set.count; i++) {
-        let u=Math.random(), v=Math.random(); if(u+v>1){u=1-u; v=1-v;}
-        const x = (Vx[0] + u*(Vx[1]-Vx[0]) + v*(Vx[2]-Vx[0]))*0.85;
-        const y = (Vy[0] + u*(Vy[1]-Vy[0]) + v*(Vy[2]-Vy[0]))*0.85;
-        pushParticle(x, y, set, cols, i, 1.0);
-      }
-    } else {                                       // SZYBA: rozłóż w klinie
-      const hw = halfWedge(), n = Math.max(6, Math.round(set.count*0.6));
-      for (let i = 0; i < n; i++) {
-        const ang = (Math.random()*2-1)*hw*0.8;
-        const rad = (R_IN + Math.sqrt(Math.random())*(0.82-R_IN))*R;
-        pushParticle(Math.cos(ang)*rad, Math.sin(ang)*rad, set, cols, i, 1.7);
-      }
+    if (pieceBodies.length) M.Composite.remove(world, pieceBodies);
+    pieces.length = 0; pieceBodies = [];
+    const set = PIECE_SETS[state.pieceSet], cols = PALETTES[state.palette];
+    const tob = state.symType===1;
+    const count = tob ? set.count : Math.max(6, Math.round(set.count*0.6));
+    const sizeMul = tob ? 1.0 : 1.7;
+    const V = chamberVerts();
+    for (let i=0;i<count;i++){
+      let u=Math.random(), v=Math.random(); if(u+v>1){u=1-u; v=1-v;}
+      const x=(V[0].x + u*(V[1].x-V[0].x) + v*(V[2].x-V[0].x))*0.6;
+      const y=(V[0].y + u*(V[1].y-V[0].y) + v*(V[2].y-V[0].y))*0.6;
+      const r=R*(0.05 + Math.random()*0.05)*set.size*sizeMul;
+      const hex=cols[i%cols.length], kind=set.kinds[(Math.random()*set.kinds.length)|0];
+      const body=makeBody(x, y, kind, r);
+      M.Body.setAngle(body, Math.random()*Math.PI*2);
+      pieces.push({ body, kind, col:colorsFor(hex), r, hex });
+      pieceBodies.push(body);
     }
+    M.Composite.add(world, pieceBodies);
   }
-
-  // ---------- Fizyka: szybki spadek + lekkie tarcie (bez „syropu") ----------
-  const GRAV = 5200, DAMP = 0.997, ITER = 4, VMAX = 9000;
-  const REST = 0.30;      // odbicie -> żywszy ruch
-  const MU_P = 0.12;      // małe tarcie między szkiełkami
-  const MU_W = 0.07;      // małe tarcie o lustra
-  const ANG_DAMP = 0.86;  // tarcie obrotowe -> nie kręcą się w kółko
-
-  function bounceEdge(p, nx, ny, lim) {   // wepchnij za krawędź-lustro + odbij + tarcie
-    const s = p.x*nx + p.y*ny;
-    if (s > lim) {
-      p.x -= (s-lim)*nx; p.y -= (s-lim)*ny;
-      const vn = p.vx*nx + p.vy*ny;
-      if (vn > 0) { p.vx -= (1+REST)*vn*nx; p.vy -= (1+REST)*vn*ny; }
-      const tx=-ny, ty=nx, vt=p.vx*tx+p.vy*ty;
-      p.vx -= MU_W*vt*tx; p.vy -= MU_W*vt*ty;
-    }
-  }
-  function wallBounce(p) {
-    if (state.symType === 1) {               // TOBLERONE: 3 krawędzie trójkąta
-      const a = triApothem();
-      for (let k=0;k<3;k++) bounceEdge(p, TRI_N[k][0], TRI_N[k][1], a - p.r);
-    } else {                                  // SZYBA: 2 lustra klina + obudowa + otwór
-      const hw = halfWedge(), S = Math.sin(hw), C = Math.cos(hw);
-      bounceEdge(p, -S,  C, -p.r);           // górne lustro (normalna zewnętrzna)
-      bounceEdge(p, -S, -C, -p.r);           // dolne lustro
-      let d = Math.hypot(p.x,p.y) || 1e-6;
-      const outer = 0.86*R - p.r;
-      if (d > outer) { const nx=p.x/d, ny=p.y/d; p.x=nx*outer; p.y=ny*outer;
-        const vn=p.vx*nx+p.vy*ny; if(vn>0){ p.vx-=(1+REST)*vn*nx; p.vy-=(1+REST)*vn*ny; } }
-      d = Math.hypot(p.x,p.y) || 1e-6; const inner = R_IN*R + p.r;
-      if (d < inner) { const nx=p.x/d, ny=p.y/d; p.x=nx*inner; p.y=ny*inner;
-        const vn=p.vx*nx+p.vy*ny; if(vn<0){ p.vx-=(1+REST)*vn*nx; p.vy-=(1+REST)*vn*ny; } }
-    }
-  }
-  const clampToChamber = wallBounce;
+  const clampToChamber = ()=>{};   // Matter trzyma bryły w komorze
 
   function step(dt) {
     if (state.symType === 1) {
-      // TOBLERONE: 3 lustra kafelkują całe koło -> grawitacja wprost, theta = palec.
-      state.theta = state.spin;
-    } else {
-      // SZYBA: obracamy komorę tak, by grawitacja celowała w środek klina -> stos
-      // siada w środku sektora (pełne 6 odbić). Powolne śledzenie = kaskada przy przechyle.
+      state.theta = state.spin;                 // TOBLERONE: grawitacja wprost
+    } else {                                     // SZYBA: obrót śledzi grawitację (6 odbić)
       let ad = Math.atan2(state.gy, state.gx) - state.gAlign;
       while (ad > Math.PI) ad -= Math.PI*2; while (ad < -Math.PI) ad += Math.PI*2;
       state.gAlign += ad*0.08;
       state.theta = state.gAlign + state.spin;
     }
+    // grawitacja przeniesiona do układu komory (obróconej o theta) i podana silnikowi
     const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
-    const gX = (state.gx*c - state.gy*s)*GRAV;
-    const gY = (state.gx*s + state.gy*c)*GRAV;
-    const w = state.omega;
+    let gcx = state.gx*c - state.gy*s, gcy = state.gx*s + state.gy*c;
+    const gm = Math.hypot(gcx,gcy) || 1;
+    engine.gravity.x = gcx/gm; engine.gravity.y = gcy/gm;
 
-    // drgnięcie tylko przy zmianie przechyłu (w spoczynku szkiełka stoją nieruchomo)
-    const dTilt = Math.hypot(state.gx-state.pgx, state.gy-state.pgy);
-    state.pgx = state.gx; state.pgy = state.gy;
-    const jit = dTilt*40;
+    M.Engine.update(engine, 1000/60);            // krok fizyki (bryły sztywne)
 
-    // 1) siły + całkowanie; tarcie obrotowe zatrzymuje wirowanie
-    for (const p of particles) {
-      p.vx += (gX + w*w*p.x + 2*w*p.vy)*dt + (Math.random()-.5)*jit;
-      p.vy += (gY + w*w*p.y - 2*w*p.vx)*dt + (Math.random()-.5)*jit;
-      p.vx *= DAMP; p.vy *= DAMP;
-      const sp2 = p.vx*p.vx + p.vy*p.vy;
-      if (sp2 > VMAX*VMAX) { const k = VMAX/Math.sqrt(sp2); p.vx*=k; p.vy*=k; }
-      p.x += p.vx*dt; p.y += p.vy*dt;
-      p.rot += p.vrot*dt; p.vrot *= ANG_DAMP;
-    }
-
-    // 2) kolizje: rozdziel + niska sprężystość + TARCIE -> budują stos i blokują
-    for (let it = 0; it < ITER; it++) {
-      for (let i = 0; i < particles.length; i++) {
-        const a = particles[i];
-        for (let j = i+1; j < particles.length; j++) {
-          const b = particles[j];
-          const dx = b.x-a.x, dy = b.y-a.y;
-          const d = Math.hypot(dx,dy), min = a.r+b.r;
-          if (d > 1e-6 && d < min) {
-            const nx = dx/d, ny = dy/d, corr = (min-d), tot = a.invM+b.invM;
-            a.x -= nx*corr*(a.invM/tot); a.y -= ny*corr*(a.invM/tot);
-            b.x += nx*corr*(b.invM/tot); b.y += ny*corr*(b.invM/tot);
-            const rvn = (b.vx-a.vx)*nx + (b.vy-a.vy)*ny;      // normalny impuls
-            if (rvn < 0) {
-              const e = Math.min(a.e, b.e), imp = -(1+e)*rvn/tot;
-              a.vx -= imp*a.invM*nx; a.vy -= imp*a.invM*ny;
-              b.vx += imp*b.invM*nx; b.vy += imp*b.invM*ny;
-            }
-            const tx = -ny, ty = nx;                          // tarcie styczne
-            const vt = (b.vx-a.vx)*tx + (b.vy-a.vy)*ty, jt = -vt*MU_P/tot;
-            a.vx -= jt*a.invM*tx; a.vy -= jt*a.invM*ty;
-            b.vx += jt*b.invM*tx; b.vy += jt*b.invM*ty;
-          }
-        }
-      }
-      for (const p of particles) wallBounce(p);
-    }
-
-    state.spin += state.omega*dt;   // bezwładność obrotu palcem (theta liczone na górze)
-    state.omega *= 0.965;
+    state.spin += state.omega*dt; state.omega *= 0.93;
     state.lx += (-state.gx - state.lx)*0.08;
     state.ly += (-state.gy - state.ly)*0.08;
     state.time += dt;
-    // światło żyje: delikatne migotanie (jak realne, wpadające światło)
     state.flicker = 1 + 0.035*Math.sin(state.time*2.3) + (Math.random()-.5)*0.02;
   }
 
@@ -450,8 +397,11 @@
     const stripes=140;
     for (let i=0;i<stripes;i++){ const a=i/stripes*Math.PI*2; sctx.moveTo(0,0); sctx.lineTo(Math.cos(a)*R,Math.sin(a)*R); }
     sctx.stroke();
-    const order = particles.slice().sort((a,b)=>a.r-b.r);
-    for (const p of order) drawPiece(sctx,p);
+    const order = pieces.slice().sort((a,b)=>a.r-b.r);
+    for (const pc of order) {
+      const b = pc.body;
+      drawPiece(sctx, { x:b.position.x, y:b.position.y, rot:b.angle, r:pc.r, kind:pc.kind, col:pc.col });
+    }
     sctx.restore();
   }
 
@@ -600,7 +550,7 @@
     const cssSize = Math.min(window.innerWidth, window.innerHeight);
     const px = Math.round(cssSize*state.dpr);
     view.width=px; view.height=px; scene.width=px; scene.height=px; R=px/2;
-    if (particles.length===0) makeParticles();
+    buildChamber(); makeParticles();     // komora i bryły skalują się z R
   }
   window.addEventListener('resize', resize);
 
@@ -683,10 +633,12 @@
     state.gx += ((gx/mag)-state.gx)*0.4; state.gy += ((gy/mag)-state.gy)*0.4;
   }
   function scatter(force=20) {
-    // mieszanie jak w pojemniku — mocny, losowy impuls
-    const k = Math.min(force,45)*26;
-    for (const p of particles){ p.vx+=(Math.random()-.5)*k; p.vy+=(Math.random()-.5)*k; p.vrot+=(Math.random()-.5)*8; }
-    state.omega += (Math.random()-.5)*3;
+    // potrząśnięcie: nadaj bryłom losową prędkość i obrót (miesza jak w pojemniku)
+    const kv = 8 + Math.min(force,45)*0.6;
+    for (const pc of pieces){
+      M.Body.setVelocity(pc.body, { x:(Math.random()-.5)*kv, y:(Math.random()-.5)*kv });
+      M.Body.setAngularVelocity(pc.body, (Math.random()-.5)*0.7);
+    }
     if (navigator.vibrate) navigator.vibrate(30);
   }
 
@@ -834,7 +786,7 @@
   if (!useGL) ctx2d = view.getContext('2d');
   requestAnimationFrame(loop);
 
-  window.__kal = { state, particles };  // hak diagnostyczny (podgląd fizyki)
+  window.__kal = { state, pieces, engine, M };  // hak diagnostyczny (podgląd fizyki)
 })();
 </script>
 </body>
