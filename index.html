@@ -266,18 +266,15 @@
   const R_IN = 0.03;
   const halfWedge = () => Math.PI / state.segments;
 
-  const TRI_F = 0.17;                         // apotema trójkąta jako ułamek R
-  const TRI_N = [[0,-1],[0.8660254,0.5],[-0.8660254,0.5]];
-  const triApothem = () => TRI_F * R;
+  // Oba typy = komora trójkątna (3 lustra). Różnią się WIELKOŚCIĄ kafla:
+  // Toblerone drobny/gęsty, Szyba duży (mandala z większych „kwiatów").
+  const TRI_F = () => state.symType===1 ? 0.17 : 0.33;    // apotema jako ułamek R
+  const triApothem = () => TRI_F() * R;
 
-  // Wierzchołki komory (świat, y w dół), spójne z foldem w shaderze.
+  // Wierzchołki komory-trójkąta (świat, y w dół), spójne z foldem w shaderze.
   function chamberVerts() {
-    if (state.symType === 1) {                // TOBLERONE: trójkąt (apex w dół)
-      const a = triApothem();
-      return [ {x:0,y:2*a}, {x:-1.7320508*a,y:-a}, {x:1.7320508*a,y:-a} ];
-    }
-    const hw = halfWedge(), L = 0.82*R;       // SZYBA: klin (wierzchołek w środku, otwarty w +x)
-    return [ {x:0,y:0}, {x:L*Math.cos(hw), y:L*Math.sin(hw)}, {x:L*Math.cos(hw), y:-L*Math.sin(hw)} ];
+    const a = triApothem();
+    return [ {x:0,y:2*a}, {x:-1.7320508*a,y:-a}, {x:1.7320508*a,y:-a} ];
   }
 
   function buildChamber() {
@@ -309,8 +306,8 @@
     pieces.length = 0; pieceBodies = [];
     const set = PIECE_SETS[state.pieceSet], cols = PALETTES[state.palette];
     const tob = state.symType===1;
-    const count = tob ? set.count : Math.max(6, Math.round(set.count*0.6));
-    const sizeMul = tob ? 1.0 : 1.7;
+    const count = tob ? set.count : Math.max(8, Math.round(set.count*0.7));
+    const sizeMul = tob ? 1.0 : 1.5;
     const V = chamberVerts();
     for (let i=0;i<count;i++){
       let u=Math.random(), v=Math.random(); if(u+v>1){u=1-u; v=1-v;}
@@ -328,14 +325,7 @@
   const clampToChamber = ()=>{};   // Matter trzyma bryły w komorze
 
   function step(dt) {
-    if (state.symType === 1) {
-      state.theta = state.spin;                 // TOBLERONE: grawitacja wprost
-    } else {                                     // SZYBA: obrót śledzi grawitację (6 odbić)
-      let ad = Math.atan2(state.gy, state.gx) - state.gAlign;
-      while (ad > Math.PI) ad -= Math.PI*2; while (ad < -Math.PI) ad += Math.PI*2;
-      state.gAlign += ad*0.08;
-      state.theta = state.gAlign + state.spin;
-    }
+    state.theta = state.spin;                    // obrót = tylko palec; grawitacja wprost
     // grawitacja przeniesiona do układu komory (obróconej o theta) i podana silnikowi
     const c = Math.cos(-state.theta), s = Math.sin(-state.theta);
     let gcx = state.gx*c - state.gy*s, gcy = state.gx*s + state.gy*c;
@@ -435,15 +425,7 @@
       vec2 pr = vec2(p.x*ct - p.y*st, p.x*st + p.y*ct);
       float ripple = 0.004*sin(r*36.0 + uTime*1.2);
       float ca = 0.008*(0.4+uLight);
-      vec2 fp;
-      if (uMode > 0.5) {                       // TOBLERONE
-        fp = foldTri(pr, uA);
-      } else {                                 // SZYBA: rozeta (2 lustra), próbka biegunowa
-        float a = atan(pr.y, pr.x);
-        float w = 2.0*uHw;
-        a += uHw; a = mod(a, 2.0*w); if (a > w) a = 2.0*w - a; a -= uHw;
-        fp = r * vec2(cos(a), sin(a));
-      }
+      vec2 fp = foldTri(pr, uA);               // kafelkowanie trójkątem (uA = wielkość kafla)
       vec2 rd = normalize(fp+1e-5)*ca + ripple;
       vec3 col;
       col.r = tex(fp+rd).r;
@@ -505,7 +487,7 @@
     gl.uniform2f(glU.uRes, view.width, view.height);
     gl.uniform1f(glU.uR, R);
     gl.uniform1f(glU.uTheta, state.theta);
-    gl.uniform1f(glU.uA, TRI_F);
+    gl.uniform1f(glU.uA, TRI_F());
     gl.uniform1f(glU.uHw, halfWedge());
     gl.uniform1f(glU.uMode, state.symType);
     gl.uniform1f(glU.uLight, Math.max(0, Math.min(1.2, state.lightI*state.flicker)));
