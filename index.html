@@ -309,7 +309,7 @@
     // Rozmiar szkiełek skalowany do wielkości kafla (a = apotema trójkąta), aby
     // wypełniały komorę bez białych dziur, ale zostawał zapas na dynamiczny ruch.
     const a = triApothem();
-    const count = 7;                           // mniej, ale większe -> nie nachodzą na siebie
+    const count = 9;                           // większe szkiełka, dobrana liczba
     const V = chamberVerts();
     for (let i=0;i<count;i++){
       let u=Math.random(), v=Math.random(); if(u+v>1){u=1-u; v=1-v;}
