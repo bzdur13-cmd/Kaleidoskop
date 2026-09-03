@@ -383,9 +383,9 @@
     sctx.clearRect(0,0,scene.width,scene.height);
     sctx.save(); sctx.translate(R,R);
     const bg = sctx.createRadialGradient(0,0,0,0,0,R);
-    bg.addColorStop(0,'#fbfbff'); bg.addColorStop(0.7,'#e9e9f2'); bg.addColorStop(1,'#cdcddb');
+    bg.addColorStop(0,'#1d1d2a'); bg.addColorStop(0.7,'#121220'); bg.addColorStop(1,'#08080f');
     sctx.fillStyle=bg; sctx.beginPath(); sctx.arc(0,0,R,0,Math.PI*2); sctx.fill();
-    sctx.strokeStyle='rgba(90,90,120,0.10)'; sctx.lineWidth=1; sctx.beginPath();
+    sctx.strokeStyle='rgba(170,170,210,0.06)'; sctx.lineWidth=1; sctx.beginPath();
     const stripes=140;
     for (let i=0;i<stripes;i++){ const a=i/stripes*Math.PI*2; sctx.moveTo(0,0); sctx.lineTo(Math.cos(a)*R,Math.sin(a)*R); }
     sctx.stroke();
