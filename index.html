@@ -315,7 +315,7 @@
       let u=Math.random(), v=Math.random(); if(u+v>1){u=1-u; v=1-v;}
       const x=(V[0].x + u*(V[1].x-V[0].x) + v*(V[2].x-V[0].x))*0.6;
       const y=(V[0].y + u*(V[1].y-V[0].y) + v*(V[2].y-V[0].y))*0.6;
-      const r=a*(0.50 + Math.random()*0.17);   // duże szkiełka skalowane do kafla
+      const r=a*(0.60 + Math.random()*0.18);   // duże szkiełka skalowane do kafla
       const hex=cols[i%cols.length], kind=set.kinds[(Math.random()*set.kinds.length)|0];
       const body=makeBody(x, y, kind, r);
       M.Body.setAngle(body, Math.random()*Math.PI*2);
